@@ -4,4 +4,6 @@ bin
 obj
 
 .fake
+.serena/
+.serena/*
 .serena
