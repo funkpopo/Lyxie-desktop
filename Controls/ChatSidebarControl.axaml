@@ -1,0 +1,293 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
+             xmlns:models="clr-namespace:Lyxie_desktop.Models"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="600"
+             x:Class="Lyxie_desktop.Controls.ChatSidebarControl">
+
+    <Border Name="SidebarMainContainer"
+            Background="{DynamicResource SidebarBackgroundBrush}"
+            BorderBrush="{DynamicResource SidebarBorderBrush}"
+            BorderThickness="0,0,1,0"
+            CornerRadius="0">
+        
+        <!-- 全局右键菜单 -->
+        <Border.Resources>
+            <ContextMenu x:Key="SessionContextMenu">
+                <MenuItem Name="RenameMenuItem" Header="重命名" Click="OnRenameMenuItemClick">
+                    <MenuItem.Icon>
+                        <materialIcons:MaterialIcon Kind="Edit" Width="16" Height="16"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Name="DeleteMenuItem" Header="删除" Click="OnDeleteMenuItemClick">
+                    <MenuItem.Icon>
+                        <materialIcons:MaterialIcon Kind="Delete" Width="16" Height="16"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator/>
+                <MenuItem Name="ExportMenuItem" Header="导出对话" Click="OnExportMenuItemClick">
+                    <MenuItem.Icon>
+                        <materialIcons:MaterialIcon Kind="Export" Width="16" Height="16"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+            </ContextMenu>
+        </Border.Resources>
+        
+        <!-- 主内容容器 -->
+        <Grid Name="MainContentGrid">
+            
+            <!-- 展开状态的完整布局 -->
+            <Grid Name="ExpandedLayout" IsVisible="True">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>  <!-- 标题栏 -->
+                    <RowDefinition Height="Auto"/>  <!-- 搜索栏 -->
+                    <RowDefinition Height="*"/>     <!-- 会话列表 -->
+                </Grid.RowDefinitions>
+                
+                <!-- 标题栏 -->
+                <Border Grid.Row="0" 
+                        Background="{DynamicResource SidebarHeaderBackgroundBrush}"
+                        Height="50">
+                    <Grid Margin="15,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <TextBlock Grid.Column="0"
+                                   Text="聊天记录"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource PrimaryTextBrush}"/>
+                        
+                        <Button Grid.Column="1"
+                                Name="NewChatButton"
+                                Width="32"
+                                Height="32"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                CornerRadius="16"
+                                Cursor="Hand"
+                                Margin="0,0,8,0"
+                                VerticalAlignment="Center"
+                                ToolTip.Tip="新建对话">
+                            <materialIcons:MaterialIcon Kind="Plus"
+                                                        Width="18"
+                                                        Height="18"
+                                                        Foreground="{DynamicResource IconBrush}"/>
+                            <Button.Styles>
+                                <Style Selector="Button:pointerover">
+                                    <Setter Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                                </Style>
+                            </Button.Styles>
+                        </Button>
+                        
+                        <Button Grid.Column="2"
+                                Name="ToggleSidebarButton"
+                                Width="32"
+                                Height="32"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                CornerRadius="16"
+                                Cursor="Hand"
+                                VerticalAlignment="Center"
+                                ToolTip.Tip="收起侧边栏">
+                            <materialIcons:MaterialIcon Name="ToggleIcon"
+                                                        Kind="ChevronLeft"
+                                                        Width="18"
+                                                        Height="18"
+                                                        Foreground="{DynamicResource IconBrush}"/>
+                            <Button.Styles>
+                                <Style Selector="Button:pointerover">
+                                    <Setter Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                                </Style>
+                            </Button.Styles>
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <!-- 搜索栏 -->
+                <Border Grid.Row="1" 
+                        Margin="10,10,10,5"
+                        Background="{DynamicResource SearchBoxBackgroundBrush}"
+                        BorderBrush="{DynamicResource SearchBoxBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <materialIcons:MaterialIcon Grid.Column="0"
+                                                    Kind="Search"
+                                                    Width="16"
+                                                    Height="16"
+                                                    Margin="8,0,4,0"
+                                                    VerticalAlignment="Center"
+                                                    Foreground="{DynamicResource SecondaryTextBrush}"/>
+                        
+                        <TextBox Grid.Column="1"
+                                 Name="SearchTextBox"
+                                 Watermark="搜索对话..."
+                                 FontSize="13"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 VerticalAlignment="Center"
+                                 Padding="4,8"/>
+                        
+                        <Button Grid.Column="2"
+                                Name="ClearSearchButton"
+                                Width="20"
+                                Height="20"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Margin="4,0,8,0"
+                                VerticalAlignment="Center"
+                                IsVisible="False">
+                            <materialIcons:MaterialIcon Kind="Close"
+                                                        Width="14"
+                                                        Height="14"
+                                                        Foreground="{DynamicResource SecondaryTextBrush}"/>
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <!-- 会话列表 -->
+                <ScrollViewer Grid.Row="2"
+                              Name="SessionScrollViewer"
+                              Margin="5,0"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <ItemsControl Name="SessionList"
+                                  Margin="5,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="models:ChatSession">
+                                <Border Name="SessionItem"
+                                        Margin="0,2"
+                                        Padding="12,10"
+                                        Background="Transparent"
+                                        CornerRadius="8"
+                                        Cursor="Hand"
+                                        Tag="{Binding .}">
+                                    <Border.Styles>
+                                        <Style Selector="Border:pointerover">
+                                            <Setter Property="Background" Value="{DynamicResource SessionItemHoverBackgroundBrush}"/>
+                                        </Style>
+                                        <Style Selector="Border.selected">
+                                            <Setter Property="Background" Value="{DynamicResource SessionItemSelectedBackgroundBrush}"/>
+                                        </Style>
+                                    </Border.Styles>
+                                    
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <!-- 会话标题 -->
+                                        <TextBlock Grid.Row="0"
+                                                   Text="{Binding Title}"
+                                                   FontSize="13"
+                                                   FontWeight="Medium"
+                                                   Foreground="{DynamicResource PrimaryTextBrush}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   MaxLines="1"/>
+
+                                        <!-- 最后消息预览 -->
+                                        <TextBlock Grid.Row="1"
+                                                   Text="{Binding LastMessage}"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource SecondaryTextBrush}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   MaxLines="2"
+                                                   Margin="0,4,0,0"
+                                                   IsVisible="{Binding LastMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+                                        <!-- 时间戳 -->
+                                        <TextBlock Grid.Row="2"
+                                                   Text="{Binding LastUpdatedAt, StringFormat='{}{0:MM-dd HH:mm}'}"
+                                                   FontSize="10"
+                                                   Foreground="{DynamicResource TertiaryTextBrush}"
+                                                   HorizontalAlignment="Right"
+                                                   Margin="0,4,0,0"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- 收起状态的简化布局 -->
+            <Grid Name="CollapsedLayout" IsVisible="False">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="50"/>   <!-- 标题栏高度 -->
+                    <RowDefinition Height="*"/>    <!-- 按钮区域 -->
+                </Grid.RowDefinitions>
+                
+                <!-- 收起状态标题栏 -->
+                <Border Grid.Row="0" 
+                        Background="{DynamicResource SidebarHeaderBackgroundBrush}">
+                    <Button Name="ToggleSidebarButtonCollapsed"
+                            Width="36"
+                            Height="36"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="18"
+                            Cursor="Hand"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            ToolTip.Tip="展开侧边栏"
+                            ToolTip.Placement="Right">
+                        <materialIcons:MaterialIcon Kind="ChevronRight"
+                                                    Width="20"
+                                                    Height="20"
+                                                    Foreground="{DynamicResource IconBrush}"/>
+                        <Button.Styles>
+                            <Style Selector="Button:pointerover">
+                                <Setter Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                            </Style>
+                        </Button.Styles>
+                    </Button>
+                </Border>
+                
+                <!-- 收起状态功能按钮 -->
+                <StackPanel Grid.Row="1" 
+                            Orientation="Vertical"
+                            HorizontalAlignment="Center"
+                            Margin="0,16,0,0"
+                            Spacing="12">
+                    
+                    <!-- 新建对话按钮 -->
+                    <Button Name="NewChatButtonCollapsed"
+                            Width="36"
+                            Height="36"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="18"
+                            Cursor="Hand"
+                            ToolTip.Tip="新建对话"
+                            ToolTip.Placement="Right">
+                        <materialIcons:MaterialIcon Kind="Plus"
+                                                    Width="20"
+                                                    Height="20"
+                                                    Foreground="{DynamicResource IconBrush}"/>
+                        <Button.Styles>
+                            <Style Selector="Button:pointerover">
+                                <Setter Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                            </Style>
+                        </Button.Styles>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+        </Grid>
+    </Border>
+</UserControl> 

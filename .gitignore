@@ -4,6 +4,6 @@ bin
 obj
 
 .fake
-.serena/
-.serena/*
 .serena
+
+功能计划.md

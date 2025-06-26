@@ -33,6 +33,9 @@ public partial class App : Application
     {
         // 在创建主窗口前加载并应用设置
         LoadAndApplySettings();
+        
+        // 初始化聊天数据库
+        InitializeChatDatabase();
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -153,6 +156,20 @@ public partial class App : Application
             // 如果设置文件不存在，使用默认设置
             ThemeService.InitializeTheme(ThemeMode.System);
             LanguageService.SetLanguage(Language.SimplifiedChinese);
+        }
+    }
+    
+    // 初始化聊天数据库
+    private async void InitializeChatDatabase()
+    {
+        try
+        {
+            await ChatDataHelper.InitializeDatabaseAsync();
+            System.Diagnostics.Debug.WriteLine("聊天数据库初始化成功");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to initialize chat database: {ex.Message}");
         }
     }
     

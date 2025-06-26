@@ -104,17 +104,21 @@ public partial class MainWindow : Window
             var welcomeTransform = welcomeView.RenderTransform as TranslateTransform;
 
             // 确保只有当前活动的视图可见，其他视图隐藏在屏幕外
-            if (mainTransform != null && Math.Abs(mainTransform.Y) < 10)
-            {
-                // MainView是活动的
-                if (settingsTransform != null) 
+                            if (mainTransform != null && Math.Abs(mainTransform.Y) < 10)
                 {
-                    // 设置界面应该在左侧隐藏
-                    settingsTransform.X = -this.Width;
-                    settingsTransform.Y = 0;
+                    // MainView是活动的
+                    if (settingsTransform != null) 
+                    {
+                        // 设置界面应该在左侧隐藏
+                        settingsTransform.X = -this.Width;
+                        settingsTransform.Y = 0;
+                    }
+                    if (welcomeTransform != null) 
+                    {
+                        welcomeTransform.Y = -this.Height;
+                        welcomeView.IsVisible = false; // 完全隐藏WelcomeView
+                    }
                 }
-                if (welcomeTransform != null) welcomeTransform.Y = -this.Height;
-            }
             else if (settingsTransform != null && Math.Abs(settingsTransform.X) < 10)
             {
                 // SettingsView是活动的
@@ -159,6 +163,10 @@ public partial class MainWindow : Window
         {
             try
             {
+                // 确保主界面可见
+                mainView.IsVisible = true;
+                mainView.Opacity = 1.0;
+                
                 // 获取Transform对象
                 var welcomeTransform = welcomeView.RenderTransform as TranslateTransform;
                 var mainTransform = mainView.RenderTransform as TranslateTransform;
@@ -187,7 +195,8 @@ public partial class MainWindow : Window
                     // 同时运行两个动画
                     await Task.WhenAll(tasks);
                     
-                    // 确保最终位置正确
+                    // 动画完成后完全隐藏WelcomeView
+                    welcomeView.IsVisible = false;
                     welcomeTransform.Y = -760;
                     mainTransform.Y = 0;
                 }
@@ -201,12 +210,13 @@ public partial class MainWindow : Window
                     await AnimationHelper.CreateOpacityAnimation(welcomeView, 1.0, 0.0, TimeSpan.FromMilliseconds(300));
                     await AnimationHelper.CreateOpacityAnimation(mainView, 0.0, 1.0, TimeSpan.FromMilliseconds(300));
                     
+                    // 完全隐藏WelcomeView
                     welcomeView.IsVisible = false;
                 }
             }
             catch (Exception ex)
             {
-                // 如果动画出错，直接显示主界面
+                // 如果动画出错，直接显示主界面并隐藏欢迎界面
                 Console.WriteLine($"Animation error: {ex.Message}");
                 welcomeView.IsVisible = false;
                 mainView.IsVisible = true;

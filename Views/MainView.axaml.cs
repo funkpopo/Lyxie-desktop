@@ -57,6 +57,11 @@ public partial class MainView : UserControl
     private TtsApiService? _ttsApiService;
     private StringBuilder? _currentAiResponseBuilder;
 
+    // 聊天历史和侧边栏
+    private ChatSidebarControl? _chatSidebar;
+    private ChatHistory _chatHistory = new();
+    private ChatSession? _currentSession;
+
     public MainView()
     {
         InitializeComponent();
@@ -125,6 +130,9 @@ public partial class MainView : UserControl
         
         // 初始化TTS服务
         InitializeTtsService();
+        
+        // 初始化聊天历史和侧边栏
+        InitializeChatHistory();
     }
     
     // 初始化工具面板开关状态
@@ -611,6 +619,395 @@ public partial class MainView : UserControl
 
     #endregion
 
+    #region WelcomeView按钮管理
+
+    /// <summary>
+    /// 隐藏WelcomeView的按钮
+    /// </summary>
+    private void HideWelcomeViewButtons()
+    {
+        var settingsButton = this.FindControl<Button>("SettingsButton");
+        var toolButton = this.FindControl<Button>("ToolButton");
+        
+        if (settingsButton != null)
+        {
+            settingsButton.IsVisible = false;
+        }
+        
+        if (toolButton != null)
+        {
+            toolButton.IsVisible = false;
+        }
+    }
+
+    /// <summary>
+    /// 显示WelcomeView的按钮
+    /// </summary>
+    private void ShowWelcomeViewButtons()
+    {
+        var settingsButton = this.FindControl<Button>("SettingsButton");
+        var toolButton = this.FindControl<Button>("ToolButton");
+        
+        if (settingsButton != null)
+        {
+            settingsButton.IsVisible = true;
+        }
+        
+        if (toolButton != null)
+        {
+            toolButton.IsVisible = true;
+        }
+    }
+
+    #endregion
+
+    #region 聊天历史和侧边栏
+
+    /// <summary>
+    /// 初始化聊天历史和侧边栏
+    /// </summary>
+    private async void InitializeChatHistory()
+    {
+        try
+        {
+            // 初始化数据库
+            await ChatDataHelper.InitializeDatabaseAsync();
+            
+            // 创建并初始化侧边栏控件
+            _chatSidebar = new ChatSidebarControl();
+            
+            // 绑定侧边栏事件
+            _chatSidebar.SessionSelected += OnSessionSelected;
+            _chatSidebar.NewChatRequested += OnNewChatRequested;
+            _chatSidebar.SessionDeleted += OnSessionDeleted;
+            _chatSidebar.SessionRenamed += OnSessionRenamed;
+            _chatSidebar.SidebarToggled += OnSidebarToggled;
+            
+            // 将侧边栏添加到容器
+            var sidebarContainer = this.FindControl<Border>("ChatSidebarContainer");
+            if (sidebarContainer != null)
+            {
+                sidebarContainer.Child = _chatSidebar;
+            }
+            
+            // 加载现有会话
+            await LoadChatSessions();
+            
+            System.Diagnostics.Debug.WriteLine("聊天历史和侧边栏初始化完成");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"初始化聊天历史失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 加载聊天会话
+    /// </summary>
+    private async Task LoadChatSessions()
+    {
+        try
+        {
+            if (_chatSidebar != null)
+            {
+                await _chatSidebar.LoadSessionsAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"加载聊天会话失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 会话选择事件处理
+    /// </summary>
+    private async void OnSessionSelected(object? sender, ChatSession session)
+    {
+        try
+        {
+            if (_currentSession == session) return;
+
+            _currentSession = session;
+            await LoadSessionMessages(session);
+            
+            System.Diagnostics.Debug.WriteLine($"切换到会话: {session.Title}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"切换会话失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 新建聊天事件处理
+    /// </summary>
+    private async void OnNewChatRequested(object? sender, EventArgs e)
+    {
+        try
+        {
+            var newSession = await ChatDataHelper.CreateNewSessionAsync();
+            _currentSession = newSession;
+            
+            if (_chatSidebar != null)
+            {
+                _chatSidebar.AddSession(newSession);
+                _chatSidebar.SelectedSession = newSession;
+            }
+            
+            // 清空当前消息列表
+            ClearMessageList();
+            
+            System.Diagnostics.Debug.WriteLine($"创建新会话: {newSession.Title}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"创建新会话失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 删除会话事件处理
+    /// </summary>
+    private async void OnSessionDeleted(object? sender, ChatSession session)
+    {
+        try
+        {
+            await ChatDataHelper.DeleteSessionAsync(session.Id);
+            
+            if (_chatSidebar != null)
+            {
+                _chatSidebar.RemoveSession(session);
+            }
+            
+            // 如果删除的是当前会话，清空消息列表并创建新会话
+            if (_currentSession?.Id == session.Id)
+            {
+                ClearMessageList();
+                OnNewChatRequested(this, EventArgs.Empty);
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"删除会话: {session.Title}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"删除会话失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 重命名会话事件处理
+    /// </summary>
+    private async void OnSessionRenamed(object? sender, ChatSession session)
+    {
+        try
+        {
+            // TODO: 实现重命名对话框
+            // 暂时使用简单的示例名称
+            session.Title = $"重命名的对话 - {DateTime.Now:HH:mm}";
+            session.LastUpdatedAt = DateTime.Now;
+            
+            await ChatDataHelper.UpdateSessionAsync(session);
+            
+            if (_chatSidebar != null)
+            {
+                _chatSidebar.RefreshSession(session);
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"重命名会话: {session.Title}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"重命名会话失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 侧边栏展开/收起事件处理
+    /// </summary>
+    private async void OnSidebarToggled(object? sender, bool isExpanded)
+    {
+        try
+        {
+            var chatContainer = this.FindControl<Grid>("ChatContainer");
+            if (chatContainer?.ColumnDefinitions.Count > 0)
+            {
+                var sidebarColumn = chatContainer.ColumnDefinitions[0];
+                
+                // 添加平滑的宽度过渡动画
+                const int animationDuration = 250;
+                const int steps = 15;
+                const int stepDelay = animationDuration / steps;
+                
+                double startWidth = sidebarColumn.Width.Value;
+                double targetWidth = isExpanded ? 300 : 70;
+                
+                // 执行平滑动画
+                for (int i = 0; i <= steps; i++)
+                {
+                    double progress = (double)i / steps;
+                    // 使用EaseOutCubic缓动函数
+                    double easedProgress = 1 - Math.Pow(1 - progress, 3);
+                    
+                    double currentWidth = startWidth + (targetWidth - startWidth) * easedProgress;
+                    sidebarColumn.Width = new GridLength(currentWidth);
+                    
+                    if (i < steps)
+                        await Task.Delay(stepDelay);
+                }
+                
+                // 确保最终宽度精确
+                sidebarColumn.Width = new GridLength(targetWidth);
+                
+                // 更新聊天区域的布局
+                UpdateChatAreaLayout(isExpanded);
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"侧边栏状态变更: {(isExpanded ? "展开" : "收起")}，宽度: {(isExpanded ? 300 : 70)}px");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"处理侧边栏状态变更失败: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// 更新聊天区域布局以适应侧边栏变化
+    /// </summary>
+    private void UpdateChatAreaLayout(bool sidebarExpanded)
+    {
+        try
+        {
+            var mainChatArea = this.FindControl<Grid>("MainChatArea");
+            if (mainChatArea != null)
+            {
+                // 可以在这里添加聊天区域的特殊布局调整
+                // 例如调整消息气泡的最大宽度等
+                
+                // 触发聊天区域重新布局
+                mainChatArea.InvalidateArrange();
+                mainChatArea.InvalidateMeasure();
+            }
+            
+            // 确保消息列表正确滚动
+            var messageScrollViewer = this.FindControl<ScrollViewer>("MessageScrollViewer");
+            if (messageScrollViewer != null)
+            {
+                // 延迟一帧确保布局完成后再滚动
+                Dispatcher.UIThread.Post(() =>
+                {
+                    messageScrollViewer.ScrollToEnd();
+                }, DispatcherPriority.Loaded);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"更新聊天区域布局失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 加载会话消息
+    /// </summary>
+    private async Task LoadSessionMessages(ChatSession session)
+    {
+        try
+        {
+            var messages = await ChatDataHelper.GetSessionMessagesAsync(session.Id);
+            
+            // 清空当前消息列表
+            ClearMessageList();
+            
+            // 重新显示历史消息
+            var messageList = this.FindControl<StackPanel>("MessageList");
+            if (messageList != null)
+            {
+                foreach (var message in messages)
+                {
+                    var messageBubble = new MessageBubble();
+                    bool isUser = message.MessageType == MessageType.User;
+                    
+                    // 设置消息内容和发送者
+                    string senderName = isUser ? "您" : "Lyxie";
+                    messageBubble.SetMessage(message.Content, isUser, senderName);
+                    
+                    // 设置消息气泡的对齐方式
+                    messageBubble.HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+                    
+                    messageList.Children.Add(messageBubble);
+                }
+                
+                // 滚动到底部
+                var scrollViewer = this.FindControl<ScrollViewer>("MessageScrollViewer");
+                scrollViewer?.ScrollToEnd();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"加载会话消息失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 清空消息列表
+    /// </summary>
+    private void ClearMessageList()
+    {
+        var messageList = this.FindControl<StackPanel>("MessageList");
+        messageList?.Children.Clear();
+    }
+
+    /// <summary>
+    /// 保存消息到当前会话
+    /// </summary>
+    private async Task SaveMessageToCurrentSession(string content, MessageType messageType)
+    {
+        if (_currentSession == null)
+        {
+            OnNewChatRequested(this, EventArgs.Empty);
+        }
+        
+        if (_currentSession != null)
+        {
+            var message = new ChatMessage
+            {
+                SessionId = _currentSession.Id,
+                Sender = messageType == MessageType.User ? "User" : "Assistant",
+                Content = content,
+                MessageType = messageType,
+                Timestamp = DateTime.Now
+            };
+            
+            await ChatDataHelper.SaveMessageAsync(message);
+            
+            // 如果是用户消息且当前会话标题还是默认的"新对话"，则使用用户问题内容作为标题
+            if (messageType == MessageType.User && _currentSession.Title == "新对话")
+            {
+                // 截取用户问题的前20个字符作为对话标题
+                string newTitle = content.Length > 20 ? content.Substring(0, 20) + "..." : content;
+                // 移除换行符，保持标题简洁
+                newTitle = newTitle.Replace("\n", " ").Replace("\r", " ");
+                
+                _currentSession.Title = newTitle;
+                await ChatDataHelper.UpdateSessionAsync(_currentSession);
+                
+                System.Diagnostics.Debug.WriteLine($"自动设置对话标题: {newTitle}");
+            }
+            
+            // 更新会话的最后更新时间
+            _currentSession.LastUpdatedAt = DateTime.Now;
+            _currentSession.LastMessage = content.Length > 50 ? content.Substring(0, 50) + "..." : content;
+            
+            if (_chatSidebar != null)
+            {
+                _chatSidebar.UpdateSessionOrder(_currentSession);
+                _chatSidebar.RefreshSession(_currentSession);
+            }
+        }
+    }
+
+    #endregion
+
     private void InitializeChatInterface()
     {
         // 获取对话界面相关控件
@@ -900,6 +1297,9 @@ public partial class MainView : UserControl
         _isChatVisible = true;
         _isAnimating = false;
 
+        // 隐藏WelcomeView的按钮
+        HideWelcomeViewButtons();
+
         // 聚焦到输入框
         var messageInput = this.FindControl<TextBox>("MessageInput");
         messageInput?.Focus();
@@ -1033,6 +1433,9 @@ public partial class MainView : UserControl
 
         _isChatVisible = false;
         _isAnimating = false;
+
+        // 重新显示WelcomeView的按钮
+        ShowWelcomeViewButtons();
     }
 
     private async void OnChatBackButtonClick(object? sender, RoutedEventArgs e)
@@ -1131,6 +1534,9 @@ public partial class MainView : UserControl
 
         System.Diagnostics.Debug.WriteLine($"发送消息: {message}");
 
+        // 保存用户消息到数据库
+        await SaveMessageToCurrentSession(message, MessageType.User);
+
         // 创建用户消息气泡
         var userBubble = new MessageBubble();
         userBubble.SetMessage(message, true, "您");
@@ -1216,6 +1622,9 @@ public partial class MainView : UserControl
                             var fullAiResponse = _currentAiResponseBuilder?.ToString();
                             if (!string.IsNullOrWhiteSpace(fullAiResponse))
                             {
+                                // 保存AI回复到数据库
+                                _ = SaveMessageToCurrentSession(fullAiResponse, MessageType.Assistant);
+                                
                                 HandleAiResponseForTts(fullAiResponse, aiBubble);
                             }
                         }
