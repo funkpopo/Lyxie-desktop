@@ -7,33 +7,22 @@
              mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="600"
              x:Class="Lyxie_desktop.Controls.ChatSidebarControl">
 
+    <!-- 全局右键菜单 -->
+    <UserControl.Resources>
+        <ContextMenu x:Key="SessionContextMenu">
+            <MenuItem Name="DeleteMenuItem" Header="删除" Click="OnDeleteMenuItemClick">
+                <MenuItem.Icon>
+                    <materialIcons:MaterialIcon Kind="Delete" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+        </ContextMenu>
+    </UserControl.Resources>
+
     <Border Name="SidebarMainContainer"
             Background="{DynamicResource SidebarBackgroundBrush}"
             BorderBrush="{DynamicResource SidebarBorderBrush}"
             BorderThickness="0,0,1,0"
             CornerRadius="0">
-        
-        <!-- 全局右键菜单 -->
-        <Border.Resources>
-            <ContextMenu x:Key="SessionContextMenu">
-                <MenuItem Name="RenameMenuItem" Header="重命名" Click="OnRenameMenuItemClick">
-                    <MenuItem.Icon>
-                        <materialIcons:MaterialIcon Kind="Edit" Width="16" Height="16"/>
-                    </MenuItem.Icon>
-                </MenuItem>
-                <MenuItem Name="DeleteMenuItem" Header="删除" Click="OnDeleteMenuItemClick">
-                    <MenuItem.Icon>
-                        <materialIcons:MaterialIcon Kind="Delete" Width="16" Height="16"/>
-                    </MenuItem.Icon>
-                </MenuItem>
-                <Separator/>
-                <MenuItem Name="ExportMenuItem" Header="导出对话" Click="OnExportMenuItemClick">
-                    <MenuItem.Icon>
-                        <materialIcons:MaterialIcon Kind="Export" Width="16" Height="16"/>
-                    </MenuItem.Icon>
-                </MenuItem>
-            </ContextMenu>
-        </Border.Resources>
         
         <!-- 主内容容器 -->
         <Grid Name="MainContentGrid">
@@ -172,15 +161,35 @@
                                         Margin="0,2"
                                         Padding="12,10"
                                         Background="Transparent"
+                                        BorderThickness="1"
+                                        BorderBrush="{DynamicResource SessionItemBorderBrush}"
                                         CornerRadius="8"
                                         Cursor="Hand"
                                         Tag="{Binding .}">
+                                    
+                                    <!-- 添加平滑过渡动画 -->
+                                    <Border.Transitions>
+                                        <Transitions>
+                                            <BrushTransition Property="Background" Duration="0:0:0.15"/>
+                                            <BrushTransition Property="BorderBrush" Duration="0:0:0.15"/>
+                                            <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"/>
+                                        </Transitions>
+                                    </Border.Transitions>
+                                    
                                     <Border.Styles>
                                         <Style Selector="Border:pointerover">
                                             <Setter Property="Background" Value="{DynamicResource SessionItemHoverBackgroundBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource SessionItemHoverBorderBrush}"/>
+                                            <Setter Property="RenderTransform" Value="scale(1.02)"/>
                                         </Style>
                                         <Style Selector="Border.selected">
                                             <Setter Property="Background" Value="{DynamicResource SessionItemSelectedBackgroundBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource SessionItemSelectedBorderBrush}"/>
+                                        </Style>
+                                        <Style Selector="Border.selected:pointerover">
+                                            <Setter Property="Background" Value="{DynamicResource SessionItemSelectedBackgroundBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource SessionItemSelectedBorderBrush}"/>
+                                            <Setter Property="RenderTransform" Value="scale(1.02)"/>
                                         </Style>
                                     </Border.Styles>
                                     

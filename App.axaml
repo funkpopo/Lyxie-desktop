@@ -147,6 +147,19 @@
                     <SolidColorBrush x:Key="CopyButtonHoverBrush" Color="#505050"/>
                     <SolidColorBrush x:Key="CopyButtonTextBrush" Color="#E0E0E0"/>
                     <SolidColorBrush x:Key="CopySuccessBrush" Color="#4CAF50"/>
+                    
+                    <!-- 侧边栏颜色 -->
+                    <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#252526"/>
+                    <SolidColorBrush x:Key="SidebarBorderBrush" Color="#404040"/>
+                    <SolidColorBrush x:Key="SidebarHeaderBackgroundBrush" Color="#2D2D30"/>
+                    <SolidColorBrush x:Key="SessionItemHoverBackgroundBrush" Color="#404040"/>
+                    <SolidColorBrush x:Key="SessionItemSelectedBackgroundBrush" Color="#0078D4"/>
+                    <SolidColorBrush x:Key="SessionItemBorderBrush" Color="#404040"/>
+                    <SolidColorBrush x:Key="SessionItemHoverBorderBrush" Color="#505050"/>
+                    <SolidColorBrush x:Key="SessionItemSelectedBorderBrush" Color="#0078D4"/>
+                    <SolidColorBrush x:Key="SearchBoxBackgroundBrush" Color="#3C3C3C"/>
+                    <SolidColorBrush x:Key="SearchBoxBorderBrush" Color="#505050"/>
+                    <SolidColorBrush x:Key="TertiaryTextBrush" Color="#808080"/>
                 </ResourceDictionary>
 
                 <!-- 浅色主题 -->
@@ -282,6 +295,19 @@
                     <SolidColorBrush x:Key="CopyButtonHoverBrush" Color="#D0D0D0"/>
                     <SolidColorBrush x:Key="CopyButtonTextBrush" Color="#2D2D30"/>
                     <SolidColorBrush x:Key="CopySuccessBrush" Color="#4CAF50"/>
+                    
+                    <!-- 侧边栏颜色 -->
+                    <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#FAFAFA"/>
+                    <SolidColorBrush x:Key="SidebarBorderBrush" Color="#E0E0E0"/>
+                    <SolidColorBrush x:Key="SidebarHeaderBackgroundBrush" Color="#F0F0F0"/>
+                    <SolidColorBrush x:Key="SessionItemHoverBackgroundBrush" Color="#F0F0F0"/>
+                    <SolidColorBrush x:Key="SessionItemSelectedBackgroundBrush" Color="#0078D4"/>
+                    <SolidColorBrush x:Key="SessionItemBorderBrush" Color="#E0E0E0"/>
+                    <SolidColorBrush x:Key="SessionItemHoverBorderBrush" Color="#D0D0D0"/>
+                    <SolidColorBrush x:Key="SessionItemSelectedBorderBrush" Color="#0078D4"/>
+                    <SolidColorBrush x:Key="SearchBoxBackgroundBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="SearchBoxBorderBrush" Color="#D0D0D0"/>
+                    <SolidColorBrush x:Key="TertiaryTextBrush" Color="#666666"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>

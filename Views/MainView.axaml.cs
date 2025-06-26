@@ -680,7 +680,6 @@ public partial class MainView : UserControl
             _chatSidebar.SessionSelected += OnSessionSelected;
             _chatSidebar.NewChatRequested += OnNewChatRequested;
             _chatSidebar.SessionDeleted += OnSessionDeleted;
-            _chatSidebar.SessionRenamed += OnSessionRenamed;
             _chatSidebar.SidebarToggled += OnSidebarToggled;
             
             // 将侧边栏添加到容器
@@ -792,33 +791,6 @@ public partial class MainView : UserControl
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"删除会话失败: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// 重命名会话事件处理
-    /// </summary>
-    private async void OnSessionRenamed(object? sender, ChatSession session)
-    {
-        try
-        {
-            // TODO: 实现重命名对话框
-            // 暂时使用简单的示例名称
-            session.Title = $"重命名的对话 - {DateTime.Now:HH:mm}";
-            session.LastUpdatedAt = DateTime.Now;
-            
-            await ChatDataHelper.UpdateSessionAsync(session);
-            
-            if (_chatSidebar != null)
-            {
-                _chatSidebar.RefreshSession(session);
-            }
-            
-            System.Diagnostics.Debug.WriteLine($"重命名会话: {session.Title}");
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"重命名会话失败: {ex.Message}");
         }
     }
 

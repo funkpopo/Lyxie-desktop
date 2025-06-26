@@ -4,6 +4,8 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
+using Avalonia.VisualTree;
+using Avalonia.Controls.Presenters;
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -22,7 +24,6 @@ namespace Lyxie_desktop.Controls
         public event EventHandler<ChatSession>? SessionSelected;
         public event EventHandler? NewChatRequested;
         public event EventHandler<ChatSession>? SessionDeleted;
-        public event EventHandler<ChatSession>? SessionRenamed;
         public event EventHandler<bool>? SidebarToggled;
 
         // 数据属性
@@ -305,8 +306,26 @@ namespace Lyxie_desktop.Controls
             var sessionList = this.FindControl<ItemsControl>("SessionList");
             if (sessionList?.ItemsSource != null)
             {
-                // 触发UI更新以显示选中状态
-                // 注意：这里可能需要根据具体的UI绑定方式进行调整
+                // 遍历所有会话项，更新样式类
+                foreach (var item in sessionList.GetVisualChildren())
+                {
+                    if (item is ContentPresenter contentPresenter)
+                    {
+                        var border = contentPresenter.GetVisualChildren().OfType<Border>().FirstOrDefault(b => b.Name == "SessionItem");
+                        if (border?.Tag is ChatSession session)
+                        {
+                            // 更新选中状态的样式类
+                            if (session == _selectedSession)
+                            {
+                                border.Classes.Add("selected");
+                            }
+                            else
+                            {
+                                border.Classes.Remove("selected");
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -343,29 +362,11 @@ namespace Lyxie_desktop.Controls
             IsExpanded = !IsExpanded;
         }
 
-        private void OnRenameSessionMenuItemClick(object? sender, RoutedEventArgs e)
-        {
-            if (_contextMenuSession != null)
-            {
-                // TODO: 显示重命名对话框
-                // 暂时触发事件
-                SessionRenamed?.Invoke(this, _contextMenuSession);
-            }
-        }
-
         private void OnDeleteSessionMenuItemClick(object? sender, RoutedEventArgs e)
         {
             if (_contextMenuSession != null)
             {
                 SessionDeleted?.Invoke(this, _contextMenuSession);
-            }
-        }
-
-        private void OnExportSessionMenuItemClick(object? sender, RoutedEventArgs e)
-        {
-            if (_contextMenuSession != null)
-            {
-                // TODO: 实现导出功能
             }
         }
 
@@ -454,19 +455,13 @@ namespace Lyxie_desktop.Controls
                         {
                             // 左键点击
                             OnSessionItemClicked(session);
+                            e.Handled = true;
                         }
                         else if (properties.IsRightButtonPressed)
                         {
-                            // 右键点击
+                            // 右键按下时记录会话，但不立即显示菜单
                             _contextMenuSession = session;
-                            
-                            // 显示右键菜单
-                            var contextMenu = this.FindResource("SessionContextMenu") as ContextMenu;
-                            if (contextMenu != null)
-                            {
-                                contextMenu.Open(border);
-                                e.Handled = true;
-                            }
+                            e.Handled = true;
                         }
                         break;
                     }
@@ -484,37 +479,38 @@ namespace Lyxie_desktop.Controls
         /// </summary>
         private void OnControlPointerReleased(object? sender, PointerReleasedEventArgs e)
         {
-            if (e.InitialPressMouseButton == MouseButton.Right)
+            try
             {
-                var target = e.Source as Control;
-                
-                // 向上遍历视觉树，查找会话项
-                while (target != null)
+                if (e.InitialPressMouseButton == MouseButton.Right && _contextMenuSession != null)
                 {
-                    if (target is Border border && border.Name == "SessionItem" && border.Tag is ChatSession session)
+                    var target = e.Source as Control;
+                    
+                    // 向上遍历视觉树，查找会话项
+                    while (target != null)
                     {
-                        _contextMenuSession = session;
-                        
-                        // 显示右键菜单
-                        var contextMenu = this.FindResource("SessionContextMenu") as ContextMenu;
-                        if (contextMenu != null)
+                        if (target is Border border && border.Name == "SessionItem" && border.Tag is ChatSession session)
                         {
-                            contextMenu.Open(border);
-                            e.Handled = true;
+                            // 确保释放的是同一个会话项
+                            if (session == _contextMenuSession)
+                            {
+                                // 显示右键菜单
+                                var contextMenu = this.FindResource("SessionContextMenu") as ContextMenu;
+                                if (contextMenu != null)
+                                {
+                                    contextMenu.Open(border);
+                                    e.Handled = true;
+                                }
+                            }
+                            break;
                         }
-                        break;
+                        target = target.Parent as Control;
                     }
-                    target = target.Parent as Control;
                 }
             }
-        }
-
-        /// <summary>
-        /// 重命名菜单项点击
-        /// </summary>
-        private void OnRenameMenuItemClick(object? sender, RoutedEventArgs e)
-        {
-            OnRenameSessionMenuItemClick(sender, e);
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"处理右键菜单失败: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -523,14 +519,6 @@ namespace Lyxie_desktop.Controls
         private void OnDeleteMenuItemClick(object? sender, RoutedEventArgs e)
         {
             OnDeleteSessionMenuItemClick(sender, e);
-        }
-
-        /// <summary>
-        /// 导出菜单项点击
-        /// </summary>
-        private void OnExportMenuItemClick(object? sender, RoutedEventArgs e)
-        {
-            OnExportSessionMenuItemClick(sender, e);
         }
     }
 } 
