@@ -659,6 +659,95 @@ public partial class MainView : UserControl
         }
     }
 
+    /// <summary>
+    /// 带动画效果隐藏WelcomeView的按钮
+    /// </summary>
+    private async Task HideWelcomeViewButtonsAnimated()
+    {
+        var settingsButton = this.FindControl<Button>("SettingsButton");
+        var toolButton = this.FindControl<Button>("ToolButton");
+        
+        var buttons = new[] { settingsButton, toolButton }.Where(b => b != null).ToArray();
+        if (buttons.Length == 0) return;
+
+        // 快速淡出动画
+        const int steps = 8;
+        const int duration = 150;
+        const int stepDelay = duration / steps;
+
+        for (int i = 0; i <= steps; i++)
+        {
+            double opacity = 1.0 - (double)i / steps;
+            
+            foreach (var button in buttons)
+            {
+                if (button != null)
+                    button.Opacity = opacity;
+            }
+
+            if (i < steps)
+                await Task.Delay(stepDelay);
+        }
+
+        // 最终隐藏按钮
+        foreach (var button in buttons)
+        {
+            if (button != null)
+            {
+                button.IsVisible = false;
+                button.Opacity = 1.0; // 重置透明度以备后用
+            }
+        }
+    }
+
+    /// <summary>
+    /// 带动画效果显示WelcomeView的按钮
+    /// </summary>
+    private async Task ShowWelcomeViewButtonsAnimated()
+    {
+        var settingsButton = this.FindControl<Button>("SettingsButton");
+        var toolButton = this.FindControl<Button>("ToolButton");
+        
+        var buttons = new[] { settingsButton, toolButton }.Where(b => b != null).ToArray();
+        if (buttons.Length == 0) return;
+
+        // 先显示按钮但设为透明
+        foreach (var button in buttons)
+        {
+            if (button != null)
+            {
+                button.IsVisible = true;
+                button.Opacity = 0.0;
+            }
+        }
+
+        // 快速淡入动画
+        const int steps = 8;
+        const int duration = 150;
+        const int stepDelay = duration / steps;
+
+        for (int i = 0; i <= steps; i++)
+        {
+            double opacity = (double)i / steps;
+            
+            foreach (var button in buttons)
+            {
+                if (button != null)
+                    button.Opacity = opacity;
+            }
+
+            if (i < steps)
+                await Task.Delay(stepDelay);
+        }
+
+        // 确保最终完全不透明
+        foreach (var button in buttons)
+        {
+            if (button != null)
+                button.Opacity = 1.0;
+        }
+    }
+
     #endregion
 
     #region 聊天历史和侧边栏
@@ -1154,8 +1243,25 @@ public partial class MainView : UserControl
             return;
         }
 
-        // 显示对话容器
+        // 立即隐藏WelcomeView的按钮（带动画）
+        await HideWelcomeViewButtonsAnimated();
+        
+        // 确保工具面板隐藏
+        if (_isToolPanelVisible)
+        {
+            await HideToolPanel();
+        }
+
+        // 显示对话容器并设置初始状态
         chatContainer.IsVisible = true;
+        chatContainer.Opacity = 0; // 初始透明状态，避免突然出现
+        
+        // 确保侧边栏处于正确状态
+        var chatSidebarContainer = this.FindControl<Border>("ChatSidebarContainer");
+        if (chatSidebarContainer != null)
+        {
+            chatSidebarContainer.Opacity = 0; // 初始透明，稍后渐显
+        }
 
         // 第一步：圆形按钮收缩并向下移动（300ms）
         var buttonAnimation = Task.Run(async () =>
@@ -1246,9 +1352,32 @@ public partial class MainView : UserControl
         mainButton.IsVisible = false;
         borderContainer.IsVisible = false;
 
-        // 第二步：显示输入区域（200ms）
+        // 第二步：渐显对话容器、侧边栏并显示输入区域
+        await Task.Run(async () =>
+        {
+            const int steps = 10;
+            const int duration = 200;
+            const int stepDelay = duration / steps;
+
+            for (int i = 0; i <= steps; i++)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    double opacity = (double)i / steps;
+                    chatContainer.Opacity = opacity;
+                    
+                    // 同时渐显侧边栏
+                    if (chatSidebarContainer != null)
+                    {
+                        chatSidebarContainer.Opacity = opacity;
+                    }
+                });
+
+                if (i < steps) await Task.Delay(stepDelay);
+            }
+        });
+        
         chatInputArea.Height = 80;
-        chatContainer.Opacity = 1;
 
         // 第三步：展开对话历史区域（400ms）
         const int expandSteps = 30;
@@ -1268,9 +1397,6 @@ public partial class MainView : UserControl
 
         _isChatVisible = true;
         _isAnimating = false;
-
-        // 隐藏WelcomeView的按钮
-        HideWelcomeViewButtons();
 
         // 聚焦到输入框
         var messageInput = this.FindControl<TextBox>("MessageInput");
@@ -1300,19 +1426,30 @@ public partial class MainView : UserControl
             return;
         }
 
-        // 反向动画：先收缩对话历史区域
-        const int collapseSteps = 20;
-        const int collapseDuration = 300;
-        const int collapseStepDelay = collapseDuration / collapseSteps;
+        // 第一步：渐隐对话容器和侧边栏
+        const int fadeSteps = 15;
+        const int fadeDuration = 200;
+        const int fadeStepDelay = fadeDuration / fadeSteps;
+        
+        var chatSidebarContainer = this.FindControl<Border>("ChatSidebarContainer");
 
-        for (int i = collapseSteps; i >= 0; i--)
+        for (int i = fadeSteps; i >= 0; i--)
         {
-            double progress = (double)i / collapseSteps;
-            if (chatHistoryArea != null)
-                chatHistoryArea.Opacity = progress;
+            double opacity = (double)i / fadeSteps;
+            chatContainer.Opacity = opacity;
+            
+            // 同时渐隐侧边栏
+            if (chatSidebarContainer != null)
+            {
+                chatSidebarContainer.Opacity = opacity;
+            }
 
-            if (i > 0) await Task.Delay(collapseStepDelay);
+            if (i > 0) await Task.Delay(fadeStepDelay);
         }
+
+        // 第二步：收缩对话历史区域
+        if (chatHistoryArea != null)
+            chatHistoryArea.Opacity = 0;
 
         // 显示主按钮和边框
         mainButton.IsVisible = true;
@@ -1397,7 +1534,6 @@ public partial class MainView : UserControl
         // 隐藏对话容器
         if (chatContainer != null)
         {
-            chatContainer.Opacity = 0;
             chatContainer.IsVisible = false;
         }
         if (chatInputArea != null)
@@ -1406,8 +1542,8 @@ public partial class MainView : UserControl
         _isChatVisible = false;
         _isAnimating = false;
 
-        // 重新显示WelcomeView的按钮
-        ShowWelcomeViewButtons();
+        // 重新显示WelcomeView的按钮（带动画）
+        await ShowWelcomeViewButtonsAnimated();
     }
 
     private async void OnChatBackButtonClick(object? sender, RoutedEventArgs e)
