@@ -25,17 +25,5 @@ namespace Lyxie_desktop.Models
 
         [JsonProperty("isEnabled")]
         public bool IsEnabled { get; set; } = true;
-
-        // Helper to get a clean JSON representation for editing
-        public string ToJson()
-        {
-            var tempDict = new Dictionary<string, object>();
-            if (Command != null) tempDict.Add("command", Command);
-            if (Args != null) tempDict.Add("args", Args);
-            if (Url != null) tempDict.Add("url", Url);
-            if (Protocol != null) tempDict.Add("protocol", Protocol);
-            tempDict.Add("isEnabled", IsEnabled);
-            return JsonConvert.SerializeObject(tempDict, Formatting.Indented);
-        }
     }
 }

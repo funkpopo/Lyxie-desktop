@@ -355,17 +355,26 @@
                             Background="{DynamicResource CardBackgroundBrush}"
                             BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
                         <StackPanel Spacing="15">
-                            <TextBlock Text="MCP 工具" FontSize="18" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource PrimaryTextBrush}"/>
-                            <ItemsControl ItemsSource="{Binding McpServices}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:McpServiceViewModel">
-                                        <Border Background="{DynamicResource CardBackgroundBrush}"
-                                                BorderBrush="{DynamicResource CardBorderBrush}"
-                                                BorderThickness="0,0,0,1" Padding="0,10">
-                                            <StackPanel Spacing="10">
-                                                <!-- Service Details Row -->
-                                                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" RowDefinitions="Auto" VerticalAlignment="Center">
+                            <Grid ColumnDefinitions="*, Auto">
+                                <TextBlock Text="MCP 工具" FontSize="18" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource PrimaryTextBrush}"
+                                           VerticalAlignment="Center"/>
+                                <Button Name="EditMcpFileButton" Grid.Column="1"
+                                        Content="统一编辑"
+                                        Click="EditMcpFileButton_Click"
+                                        Padding="10,5"
+                                        IsEnabled="{Binding !IsEditingMcpFile}"/>
+                            </Grid>
+
+                            <!-- View for listing services -->
+                            <Panel IsVisible="{Binding !IsEditingMcpFile}">
+                                <ItemsControl ItemsSource="{Binding McpServices}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:McpServiceViewModel">
+                                            <Border Background="{DynamicResource CardBackgroundBrush}"
+                                                    BorderBrush="{DynamicResource CardBorderBrush}"
+                                                    BorderThickness="0,0,0,1" Padding="0,10">
+                                                <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto" VerticalAlignment="Center">
                                                     <!-- Icon -->
                                                     <materialIcons:MaterialIcon Kind="{Binding IconKind}" Grid.Column="0" Width="24" Height="24"
                                                                                 Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,0,15,0"
@@ -384,43 +393,41 @@
                                                              Fill="{Binding IsAvailable, Converter={StaticResource BoolToBrushConverter}, ConverterParameter='Green,#404040'}"
                                                              VerticalAlignment="Center"/>
 
-                                                    <!-- Edit Button -->
-                                                    <Button Name="EditMcpConfigButton" Grid.Column="3"
-                                                            Click="EditMcpConfigButton_Click"
-                                                            Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                                            Padding="5" Margin="0,0,5,0">
-                                                        <materialIcons:MaterialIcon Kind="Pencil" Width="18" Height="18" Foreground="{DynamicResource IconBrush}"/>
-                                                    </Button>
-
                                                     <!-- Toggle Switch -->
-                                                    <ToggleSwitch Grid.Column="4" IsChecked="{Binding IsEnabled}"
+                                                    <ToggleSwitch Grid.Column="3" IsChecked="{Binding IsEnabled}"
                                                                   OnContent="" OffContent="" Margin="5,0,0,0"
                                                                   VerticalAlignment="Center"/>
                                                 </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                
+                                <TextBlock Text="MCP 工具配置为空，请点击“统一编辑”添加配置。" 
+                                           FontSize="14"
+                                           Foreground="{DynamicResource SecondaryTextBrush}"
+                                           IsVisible="{Binding !IsMcpConfigPresent}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,30"/>
+                            </Panel>
 
-                                                <!-- Editing View -->
-                                                <Panel IsVisible="{Binding IsEditing}">
-                                                    <Border Background="#1A1A1A" BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,10,0,0">
-                                                        <StackPanel Spacing="10">
-                                                            <TextBlock Text="编辑JSON配置" FontSize="12" Foreground="{DynamicResource SecondaryTextBrush}"/>
-                                                            <TextBox Text="{Binding ConfigJson, Mode=TwoWay}"
-                                                                     AcceptsReturn="True" TextWrapping="Wrap" Height="150"
-                                                                     FontFamily="Cascadia Mono, Consolas, monospace"/>
-                                                            
-                                                            <TextBlock Text="{Binding ValidationError}" Foreground="Red" FontSize="12" IsVisible="{Binding HasValidationError}"/>
+                            <!-- View for editing the entire JSON file -->
+                            <Panel IsVisible="{Binding IsEditingMcpFile}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="编辑 mcp_settings.json" FontSize="14" Foreground="{DynamicResource SecondaryTextBrush}"/>
+                                    <TextBox Text="{Binding McpFileContent, Mode=TwoWay}"
+                                             AcceptsReturn="True" TextWrapping="Wrap" Height="250"
+                                             FontFamily="Cascadia Mono, Consolas, monospace"
+                                             Watermark="在此处输入或粘贴 MCP JSON 配置..."/>
 
-                                                            <StackPanel Orientation="Horizontal" Spacing="10">
-                                                                <Button Name="SaveMcpEditButton" Content="保存" Click="SaveMcpEditButton_Click" CommandParameter="{Binding}" Padding="15,5"/>
-                                                                <Button Name="CancelMcpEditButton" Content="取消" Click="CancelMcpEditButton_Click" CommandParameter="{Binding}" Padding="15,5" Background="Transparent" BorderBrush="{DynamicResource ButtonBorderBrush}" BorderThickness="1"/>
-                                                            </StackPanel>
-                                                        </StackPanel>
-                                                    </Border>
-                                                </Panel>
-                                            </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                    <TextBlock Text="{Binding McpFileValidationError}" Foreground="#E57373" FontSize="12" 
+                                               IsVisible="{Binding McpFileHasError}" TextWrapping="Wrap"/>
+
+                                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,0">
+                                        <Button Name="SaveMcpFileButton" Content="保存" Click="SaveMcpFileButton_Click" Padding="15,5"/>
+                                        <Button Name="CancelMcpFileButton" Content="取消" Click="CancelMcpFileButton_Click" Padding="15,5" Background="Transparent" BorderBrush="{DynamicResource ButtonBorderBrush}" BorderThickness="1"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Panel>
                         </StackPanel>
                     </Border>
                 </Grid>

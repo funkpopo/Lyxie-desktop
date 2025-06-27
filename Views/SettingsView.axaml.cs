@@ -21,6 +21,7 @@ using Lyxie_desktop.Models;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using Avalonia.Data;
 
 namespace Lyxie_desktop.Views
 {
@@ -28,21 +29,15 @@ namespace Lyxie_desktop.Views
     // ViewModel for MCP Service Item
     public class McpServiceViewModel : INotifyPropertyChanged
     {
-        private readonly Action _saveAction;
+        private readonly Func<Task> _saveAction;
         private string _name;
         private McpServerDefinition _definition;
-        private bool _isEditing;
-        private string _configJson;
-        private string _validationError;
 
-        public McpServiceViewModel(string name, McpServerDefinition definition, Action saveAction)
+        public McpServiceViewModel(string name, McpServerDefinition definition, Func<Task> saveAction)
         {
             _name = name;
             _definition = definition;
-            _configJson = definition.ToJson();
-            _validationError = string.Empty;
             _saveAction = saveAction;
-            OriginalConfigJson = _configJson;
         }
 
         public string Name
@@ -85,48 +80,7 @@ namespace Lyxie_desktop.Views
                 }
             }
         }
-
-        public bool IsEditing
-        {
-            get => _isEditing;
-            set => SetField(ref _isEditing, value);
-        }
-
-        public string ConfigJson
-        {
-            get => _configJson;
-            set => SetField(ref _configJson, value);
-        }
-
-        public string OriginalConfigJson { get; private set; }
-
-        public string ValidationError
-        {
-            get => _validationError;
-            set
-            {
-                if (SetField(ref _validationError, value))
-                {
-                    OnPropertyChanged(nameof(HasValidationError));
-                }
-            }
-        }
-
-        public bool HasValidationError => !string.IsNullOrEmpty(ValidationError);
-
-        public void StartEditing()
-        {
-            OriginalConfigJson = ConfigJson;
-            IsEditing = true;
-        }
-
-        public void CancelEditing()
-        {
-            ConfigJson = OriginalConfigJson;
-            ValidationError = string.Empty;
-            IsEditing = false;
-        }
-
+        
         public event PropertyChangedEventHandler? PropertyChanged;
 
         protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
@@ -207,8 +161,24 @@ namespace Lyxie_desktop.Views
         }
     }
 
-    public partial class SettingsView : UserControl
+    public partial class SettingsView : UserControl, INotifyPropertyChanged
     {
+        // Explicitly implement INotifyPropertyChanged to avoid conflict with AvaloniaObject's PropertyChanged.
+        public new event PropertyChangedEventHandler? PropertyChanged;
+
+        protected bool SetAndRaise<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value)) return false;
+            field = value;
+            RaisePropertyChanged(propertyName);
+            return true;
+        }
+
+        protected void RaisePropertyChanged([CallerMemberName] string? propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
         // 事件：请求返回到主界面
         public event EventHandler? BackToMainRequested;
 
@@ -231,6 +201,34 @@ namespace Lyxie_desktop.Views
         private bool _isEditingTtsConfig = false; // 控制TTS配置详情区域的可见性
 
         public ObservableCollection<McpServiceViewModel> McpServices { get; } = new ObservableCollection<McpServiceViewModel>();
+        
+        private bool _isEditingMcpFile;
+        public bool IsEditingMcpFile
+        {
+            get => _isEditingMcpFile;
+            set { SetAndRaise(ref _isEditingMcpFile, value); }
+        }
+
+        private string _mcpFileContent = "";
+        public string McpFileContent
+        {
+            get => _mcpFileContent;
+            set { SetAndRaise(ref _mcpFileContent, value); }
+        }
+
+        private string _mcpFileValidationError = "";
+        public string McpFileValidationError
+        {
+            get => _mcpFileValidationError;
+            set
+            {
+                if (SetAndRaise(ref _mcpFileValidationError, value))
+                {
+                    RaisePropertyChanged(nameof(McpFileHasError));
+                }
+            }
+        }
+        public bool McpFileHasError => !string.IsNullOrEmpty(McpFileValidationError);
 
         private readonly LlmApiService _llmApiService;
         private readonly TtsApiService _ttsApiService;
@@ -1242,8 +1240,7 @@ namespace Lyxie_desktop.Views
         private async void InitializeMcpConfigUI()
         {
             await LoadMcpServicesAsync();
-            // The event handlers for buttons inside the DataTemplate will be handled in XAML
-            // or attached via more complex logic if needed. For now, we rely on bindings.
+            // Event handlers are now attached in XAML or via direct method calls below
         }
 
         private async Task LoadMcpServicesAsync()
@@ -1252,8 +1249,9 @@ namespace Lyxie_desktop.Views
             McpServices.Clear();
             foreach (var config in configs)
             {
-                McpServices.Add(new McpServiceViewModel(config.Key, config.Value, async () => await SaveMcpChangesAsync()));
+                McpServices.Add(new McpServiceViewModel(config.Key, config.Value, SaveMcpChangesAsync));
             }
+            RaisePropertyChanged(nameof(IsMcpConfigPresent));
         }
 
         private async Task SaveMcpChangesAsync()
@@ -1266,48 +1264,44 @@ namespace Lyxie_desktop.Views
             await McpConfigHelper.SaveConfigsAsync(newConfigs);
         }
 
-        private void EditMcpConfig(McpServiceViewModel vm)
+        public bool IsMcpConfigPresent => McpServices.Any();
+
+        public async void EditMcpFileButton_Click(object? sender, RoutedEventArgs e)
         {
-            if (vm == null) return;
-            vm.StartEditing();
+            McpFileContent = await McpConfigHelper.LoadRawConfigAsync();
+            McpFileValidationError = string.Empty;
+            IsEditingMcpFile = true;
         }
 
-        private void CancelMcpEdit(McpServiceViewModel vm)
+        public async void SaveMcpFileButton_Click(object? sender, RoutedEventArgs e)
         {
-            if (vm == null) return;
-            vm.CancelEditing();
-        }
-
-        private async Task SaveMcpEdit(McpServiceViewModel vm)
-        {
-            if (vm == null) return;
-
             try
             {
-                // Validate the JSON by trying to deserialize it into a temporary object
-                var newDef = JsonConvert.DeserializeObject<McpServerDefinition>(vm.ConfigJson);
-                if (newDef == null)
+                // Validate JSON by attempting to deserialize it.
+                var parsed = JsonConvert.DeserializeObject<McpConfigRoot>(McpFileContent);
+                if (parsed == null || parsed.McpServers == null)
                 {
-                    throw new Exception("配置为空。");
+                    throw new JsonSerializationException("JSON 根对象或 mcpServers 属性不能为空。");
                 }
-
-                // The JSON is valid, update the definition in the view model
-                vm.Definition.Command = newDef.Command;
-                vm.Definition.Args = newDef.Args;
-                vm.Definition.Url = newDef.Url;
-                vm.Definition.Protocol = newDef.Protocol;
-                vm.Definition.IsEnabled = newDef.IsEnabled;
-
-                vm.ValidationError = string.Empty;
-                vm.IsEditing = false;
-
-                // Now save all configs to the file
-                await SaveMcpChangesAsync();
+                
+                // Format the JSON before saving
+                var formattedJson = JsonConvert.SerializeObject(parsed, Formatting.Indented);
+                await McpConfigHelper.SaveRawConfigAsync(formattedJson);
+                
+                McpFileValidationError = string.Empty;
+                IsEditingMcpFile = false;
+                await LoadMcpServicesAsync(); // Reload the list
             }
             catch (Exception ex)
             {
-                vm.ValidationError = $"无效的JSON: {ex.Message}";
+                McpFileValidationError = $"无效的 JSON 或格式错误: {ex.Message}";
             }
+        }
+
+        public void CancelMcpFileButton_Click(object? sender, RoutedEventArgs e)
+        {
+            IsEditingMcpFile = false;
+            McpFileValidationError = string.Empty;
         }
 
         // 初始化TTS API配置界面
@@ -1902,30 +1896,6 @@ namespace Lyxie_desktop.Views
             if (synthesisModelTextBox != null) config.SynthesisModel = synthesisModelTextBox.Text ?? "";
 
             return config;
-        }
-
-        private void EditMcpConfigButton_Click(object? sender, RoutedEventArgs e)
-        {
-            if (sender is Button { DataContext: McpServiceViewModel vm })
-            {
-                EditMcpConfig(vm);
-            }
-        }
-
-        private async void SaveMcpEditButton_Click(object? sender, RoutedEventArgs e)
-        {
-            if (sender is Button { DataContext: McpServiceViewModel vm })
-            {
-                await SaveMcpEdit(vm);
-            }
-        }
-
-        private void CancelMcpEditButton_Click(object? sender, RoutedEventArgs e)
-        {
-            if (sender is Button { DataContext: McpServiceViewModel vm })
-            {
-                CancelMcpEdit(vm);
-            }
         }
     }
 }

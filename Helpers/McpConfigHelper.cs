@@ -9,57 +9,44 @@ namespace Lyxie_desktop.Helpers
 {
     public static class McpConfigHelper
     {
-        private static readonly string ConfigFileName = "mcp_servers.json";
+        private static readonly string ConfigFileName = "mcp_settings.json";
 
         public static string GetConfigPath()
         {
             var appDataPath = AppDataHelper.GetAppDataRootPath();
             return Path.Combine(appDataPath, ConfigFileName);
         }
+        
+        public static async Task<string> LoadRawConfigAsync()
+        {
+            var configPath = GetConfigPath();
+            if (!File.Exists(configPath))
+            {
+                return "{}"; // 返回一个空的JSON对象
+            }
+            return await File.ReadAllTextAsync(configPath);
+        }
+
+        public static async Task SaveRawConfigAsync(string jsonContent)
+        {
+            var configPath = GetConfigPath();
+            await File.WriteAllTextAsync(configPath, jsonContent);
+        }
+
 
         public static async Task<Dictionary<string, McpServerDefinition>> LoadConfigsAsync()
         {
             var configPath = GetConfigPath();
-            if (!File.Exists(configPath) || new FileInfo(configPath).Length == 0)
+            if (!File.Exists(configPath))
             {
-                // Create a default file if it doesn't exist or is empty
-                var defaultConfig = new McpConfigRoot
-                {
-                    McpServers = new Dictionary<string, McpServerDefinition>
-                    {
-                        {
-                            "codelf", new McpServerDefinition
-                            {
-                                IsEnabled = true,
-                                Protocol = "sse",
-                                Url = "http://127.0.0.1:30031/mcp"
-                            }
-                        },
-                        {
-                            "context7", new McpServerDefinition
-                            {
-                                IsEnabled = true,
-                                Protocol = "sse",
-                                Url = "http://127.0.0.1:30032/mcp"
-                            }
-                        },
-                        {
-                            "serena", new McpServerDefinition
-                            {
-                                IsEnabled = true,
-                                Protocol = "sse",
-                                Url = "http://127.0.0.1:30033/mcp"
-                            }
-                        }
-                    }
-                };
-                await SaveConfigsAsync(defaultConfig.McpServers);
-                return defaultConfig.McpServers;
+                // 如果文件不存在，返回空字典
+                return new Dictionary<string, McpServerDefinition>();
             }
 
             var json = await File.ReadAllTextAsync(configPath);
             if (string.IsNullOrWhiteSpace(json))
             {
+                // 如果文件为空，返回空字典
                 return new Dictionary<string, McpServerDefinition>();
             }
 
