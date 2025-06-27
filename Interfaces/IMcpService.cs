@@ -7,9 +7,7 @@ namespace Lyxie_desktop.Interfaces
 {
     public interface IMcpService
     {
-        Task<List<McpServerConfig>> GetConfigsAsync();
-        Task AddConfigAsync(McpServerConfig config);
-        Task UpdateConfigAsync(McpServerConfig config);
-        Task DeleteConfigAsync(Guid id);
+        Task<Dictionary<string, McpServerDefinition>> GetConfigsAsync();
+        Task SaveConfigsAsync(Dictionary<string, McpServerDefinition> configs);
     }
 } 

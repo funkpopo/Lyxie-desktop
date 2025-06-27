@@ -17,23 +17,68 @@ namespace Lyxie_desktop.Helpers
             return Path.Combine(appDataPath, ConfigFileName);
         }
 
-        public static async Task<List<McpServerConfig>> LoadConfigsAsync()
+        public static async Task<Dictionary<string, McpServerDefinition>> LoadConfigsAsync()
         {
             var configPath = GetConfigPath();
-            if (!File.Exists(configPath))
+            if (!File.Exists(configPath) || new FileInfo(configPath).Length == 0)
             {
-                return new List<McpServerConfig>();
+                // Create a default file if it doesn't exist or is empty
+                var defaultConfig = new McpConfigRoot
+                {
+                    McpServers = new Dictionary<string, McpServerDefinition>
+                    {
+                        {
+                            "codelf", new McpServerDefinition
+                            {
+                                IsEnabled = true,
+                                Protocol = "sse",
+                                Url = "http://127.0.0.1:30031/mcp"
+                            }
+                        },
+                        {
+                            "context7", new McpServerDefinition
+                            {
+                                IsEnabled = true,
+                                Protocol = "sse",
+                                Url = "http://127.0.0.1:30032/mcp"
+                            }
+                        },
+                        {
+                            "serena", new McpServerDefinition
+                            {
+                                IsEnabled = true,
+                                Protocol = "sse",
+                                Url = "http://127.0.0.1:30033/mcp"
+                            }
+                        }
+                    }
+                };
+                await SaveConfigsAsync(defaultConfig.McpServers);
+                return defaultConfig.McpServers;
             }
 
             var json = await File.ReadAllTextAsync(configPath);
-            return JsonConvert.DeserializeObject<List<McpServerConfig>>(json) ?? new List<McpServerConfig>();
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return new Dictionary<string, McpServerDefinition>();
+            }
+
+            var configRoot = JsonConvert.DeserializeObject<McpConfigRoot>(json);
+            return configRoot?.McpServers ?? new Dictionary<string, McpServerDefinition>();
         }
 
-        public static async Task SaveConfigsAsync(List<McpServerConfig> configs)
+        public static async Task SaveConfigsAsync(Dictionary<string, McpServerDefinition> configs)
         {
             var configPath = GetConfigPath();
-            var json = JsonConvert.SerializeObject(configs, Formatting.Indented);
+            var configRoot = new McpConfigRoot { McpServers = configs };
+            var json = JsonConvert.SerializeObject(configRoot, new JsonSerializerSettings
+            {
+                Formatting = Formatting.Indented,
+                NullValueHandling = NullValueHandling.Ignore
+            });
             await File.WriteAllTextAsync(configPath, json);
         }
+
+        
     }
 } 
