@@ -8,12 +8,15 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Material.Icons;
 using Material.Icons.Avalonia;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Lyxie_desktop.Services;
+using Lyxie_desktop.Helpers;
 using Lyxie_desktop.Models;
 
 namespace Lyxie_desktop.Views;
@@ -104,6 +107,9 @@ public partial class SettingsView : UserControl
     private bool _isEditingConfig = false; // 控制配置详情区域的可见性
     private bool _isAddingNewTtsConfig = false;
     private bool _isEditingTtsConfig = false; // 控制TTS配置详情区域的可见性
+    
+    private string _mcpConfigFileContent = string.Empty;
+
     private readonly LlmApiService _llmApiService;
     private readonly TtsApiService _ttsApiService;
 
@@ -163,6 +169,7 @@ public partial class SettingsView : UserControl
         // 初始化API配置界面
         InitializeLlmApiConfigUI();
         InitializeTtsApiConfigUI();
+        InitializeMcpConfigUI();
         
         // 手动触发一次Provider的变更事件，以根据默认选择更新UI
         OnTtsProviderChanged(TtsProviderComboBox, null);
@@ -210,7 +217,7 @@ public partial class SettingsView : UserControl
             if (File.Exists(_settingsPath))
             {
                 var json = File.ReadAllText(_settingsPath);
-                var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+                var settings = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
                 
                 // 确保LlmApiConfigs不为null并且活跃配置索引有效
                 settings.EnsureConfigsInitialized();
@@ -244,7 +251,7 @@ public partial class SettingsView : UserControl
             App.Settings.EnableDev1 = _settings.EnableDev1;
             App.Settings.EnableDev2 = _settings.EnableDev2;
             
-            var json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions
+            var json = System.Text.Json.JsonSerializer.Serialize(_settings, new JsonSerializerOptions
             {
                 WriteIndented = true
             });
@@ -1107,6 +1114,122 @@ public partial class SettingsView : UserControl
         }
     }
     
+    // --- MCP Config ---
+
+    private async void InitializeMcpConfigUI()
+    {
+        await LoadMcpConfigFileAsync();
+
+        var editButton = this.FindControl<Button>("EditMcpJsonButton");
+        var saveButton = this.FindControl<Button>("SaveMcpJsonButton");
+        var cancelButton = this.FindControl<Button>("CancelMcpJsonButton");
+
+        if (editButton != null) editButton.Click += OnEditMcpJsonClick;
+        if (saveButton != null) saveButton.Click += OnSaveMcpJsonClick;
+        if (cancelButton != null) cancelButton.Click += OnCancelMcpJsonClick;
+    }
+
+    private async Task LoadMcpConfigFileAsync()
+    {
+        var configPath = McpConfigHelper.GetConfigPath();
+        var jsonTextBox = this.FindControl<TextBox>("McpJsonConfigTextBox");
+        
+        try
+        {
+            if (File.Exists(configPath))
+            {
+                _mcpConfigFileContent = await File.ReadAllTextAsync(configPath);
+            }
+            else
+            {
+                _mcpConfigFileContent = "[]"; // Default to an empty JSON array
+            }
+        }
+        catch (Exception ex)
+        {
+            _mcpConfigFileContent = $"// Error loading config file: {ex.Message}";
+        }
+
+        if (jsonTextBox != null)
+        {
+            jsonTextBox.Text = _mcpConfigFileContent;
+        }
+    }
+
+    private void SetMcpJsonEditorState(bool isEditing)
+    {
+        var jsonTextBox = this.FindControl<TextBox>("McpJsonConfigTextBox");
+        var editButton = this.FindControl<Button>("EditMcpJsonButton");
+        var saveButton = this.FindControl<Button>("SaveMcpJsonButton");
+        var cancelButton = this.FindControl<Button>("CancelMcpJsonButton");
+        var validationStatus = this.FindControl<TextBlock>("McpJsonValidationStatus");
+
+        if (jsonTextBox != null) jsonTextBox.IsReadOnly = !isEditing;
+        if (editButton != null) editButton.IsVisible = !isEditing;
+        if (saveButton != null) saveButton.IsVisible = isEditing;
+        if (cancelButton != null) cancelButton.IsVisible = isEditing;
+        if (validationStatus != null) validationStatus.IsVisible = false;
+    }
+    
+    private void OnEditMcpJsonClick(object? sender, RoutedEventArgs e)
+    {
+        SetMcpJsonEditorState(true);
+    }
+    
+    private async void OnSaveMcpJsonClick(object? sender, RoutedEventArgs e)
+    {
+        var jsonTextBox = this.FindControl<TextBox>("McpJsonConfigTextBox");
+        var validationStatus = this.FindControl<TextBlock>("McpJsonValidationStatus");
+        if (jsonTextBox == null || validationStatus == null) return;
+
+        var newContent = jsonTextBox.Text;
+
+        // Validate JSON
+        try
+        {
+            // We parse it to a list of McpServerConfig to ensure it matches the expected structure.
+            var configs = Newtonsoft.Json.JsonConvert.DeserializeObject<List<McpServerConfig>>(newContent ?? string.Empty);
+            if (configs == null)
+            {
+                throw new Exception("JSON content is null after deserialization.");
+            }
+
+            // If valid, save the file
+            var configPath = McpConfigHelper.GetConfigPath();
+            var contentToSave = newContent ?? string.Empty;
+            await File.WriteAllTextAsync(configPath, contentToSave);
+            _mcpConfigFileContent = contentToSave;
+            
+            SetMcpJsonEditorState(false);
+            
+            // Optionally, show a success message
+            validationStatus.Text = "保存成功!";
+            validationStatus.Foreground = Brushes.Green;
+            validationStatus.IsVisible = true;
+            await Task.Delay(2000);
+            validationStatus.IsVisible = false;
+        }
+        catch (Exception ex)
+        {
+            // If invalid, show error
+            validationStatus.Text = $"无效的JSON格式: {ex.Message}";
+            validationStatus.Foreground = Brushes.Red;
+            validationStatus.IsVisible = true;
+        }
+    }
+
+    private void OnCancelMcpJsonClick(object? sender, RoutedEventArgs e)
+    {
+        var jsonTextBox = this.FindControl<TextBox>("McpJsonConfigTextBox");
+        if (jsonTextBox != null)
+        {
+            jsonTextBox.Text = _mcpConfigFileContent;
+        }
+        SetMcpJsonEditorState(false);
+    }
+
+    // --- End MCP Config ---
+
     // 初始化TTS API配置界面
     private void InitializeTtsApiConfigUI()
     {

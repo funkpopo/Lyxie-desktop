@@ -37,7 +37,7 @@ public static class MarkdownRenderer
 
         try
         {
-            var document = Markdown.Parse(markdownText, Pipeline);
+            var document = Markdig.Markdown.Parse(markdownText, Pipeline);
             
             foreach (var block in document)
             {

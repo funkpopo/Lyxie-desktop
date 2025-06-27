@@ -10,6 +10,7 @@ using Lyxie_desktop.Helpers;
 using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Lyxie_desktop.Interfaces;
 
 namespace Lyxie_desktop;
 
@@ -20,6 +21,9 @@ public partial class App : Application
 
     // 全局语言服务实例
     public static LanguageService LanguageService { get; private set; } = new LanguageService();
+    
+    // 全局MCP服务实例
+    public static IMcpService McpService { get; private set; } = new McpService();
     
     // 全局应用程序设置
     public static AppSettings Settings { get; private set; } = new AppSettings();
