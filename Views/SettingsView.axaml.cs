@@ -254,6 +254,8 @@ namespace Lyxie_desktop.Views
             _settings.EnsureConfigsInitialized();
 
             InitializeComponent();
+            
+            this.DataContext = this;
 
             // 应用已保存的设置
             ApplySettings();
