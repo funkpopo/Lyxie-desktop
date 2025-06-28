@@ -6,6 +6,8 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Lyxie_desktop.Interfaces;
+using Lyxie_desktop.Services;
 using Material.Icons;
 using Material.Icons.Avalonia;
 using Newtonsoft.Json;
@@ -16,7 +18,6 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Lyxie_desktop.Services;
-using Lyxie_desktop.Interfaces;
 using Lyxie_desktop.Helpers;
 using Lyxie_desktop.Models;
 using System.Collections.ObjectModel;
@@ -97,18 +98,10 @@ namespace Lyxie_desktop.Views
                 if (IsLoading) return OperationStatus;
                 if (!IsEnabled) return "已禁用";
                 
-                // 验证状态为"可用"时，优先显示"可用"，无论运行状态如何
-                if (Definition.ValidationStatus == McpValidationStatus.Available)
-                    return "可用";
-                    
-                // 未运行的stdio服务器显示"已停止"
-                if (!Definition.IsRunning && Definition.IsStdioServer) 
-                    return "已停止";
-                
                 return Definition.ValidationStatus switch
                 {
-                    // Available已在上面处理，此处不再需要
-                    McpValidationStatus.Unavailable => "不可用",
+                    McpValidationStatus.Available => "可用",
+                    McpValidationStatus.Unavailable => "不可用", 
                     McpValidationStatus.Validating => "验证中...",
                     McpValidationStatus.Timeout => "超时",
                     McpValidationStatus.ConfigurationError => "配置错误",
@@ -155,8 +148,6 @@ namespace Lyxie_desktop.Views
             }
         }
 
-
-
         public bool IsEnabled
         {
             get => Definition.IsEnabled;
@@ -167,21 +158,6 @@ namespace Lyxie_desktop.Views
                     _ = Task.Run(async () => await ToggleServerAsync(value));
                 }
             }
-        }
-        
-        public event PropertyChangedEventHandler? PropertyChanged;
-
-        protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        }
-
-        protected bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
-        {
-            if (EqualityComparer<T>.Default.Equals(field, value)) return false;
-            field = value;
-            OnPropertyChanged(propertyName);
-            return true;
         }
 
         /// <summary>
@@ -201,7 +177,6 @@ namespace Lyxie_desktop.Views
                     if (success)
                     {
                         Definition.IsEnabled = true;
-                        Definition.IsRunning = true; // 设置为运行状态
                         OperationStatus = "验证中...";
                         
                         // 立即验证服务器状态
@@ -222,7 +197,6 @@ namespace Lyxie_desktop.Views
                         Definition.IsAvailable = false;
                         Definition.ValidationStatus = McpValidationStatus.Unknown;
                         Definition.ErrorMessage = null;
-                        Definition.IsRunning = false; // 立即更新运行状态，防止停止中状态滞留
                     }
                     else
                     {
@@ -232,7 +206,7 @@ namespace Lyxie_desktop.Views
                 }
                 
                 // 触发属性变更通知
-                Dispatcher.UIThread.Invoke(() =>
+                App.Current?.Dispatcher.Invoke(() =>
                 {
                     OnPropertyChanged(nameof(IsEnabled));
                     OnPropertyChanged(nameof(StatusText));
@@ -247,7 +221,7 @@ namespace Lyxie_desktop.Views
             catch (Exception ex)
             {
                 Definition.ErrorMessage = $"操作失败: {ex.Message}";
-                Dispatcher.UIThread.Invoke(() =>
+                App.Current?.Dispatcher.Invoke(() =>
                 {
                     OperationStatus = "操作失败";
                     OnPropertyChanged(nameof(ErrorMessage));
@@ -257,22 +231,10 @@ namespace Lyxie_desktop.Views
             }
             finally
             {
-                Dispatcher.UIThread.Invoke(() =>
+                App.Current?.Dispatcher.Invoke(() =>
                 {
                     IsLoading = false;
                     OperationStatus = "";
-                    
-                    // 确保状态完全更新，防止UI显示"停止中"状态
-                    if (!Definition.IsEnabled)
-                    {
-                        Definition.IsRunning = false; // 确保运行状态也被更新
-                    }
-                    
-                    // 强制刷新所有相关UI状态
-                    OnPropertyChanged(nameof(IsEnabled));
-                    OnPropertyChanged(nameof(StatusText));
-                    OnPropertyChanged(nameof(ValidationStatusText));
-                    OnPropertyChanged(nameof(IsAvailable));
                 });
             }
         }
@@ -286,7 +248,7 @@ namespace Lyxie_desktop.Views
             if (e.ServerName != _name)
                 return;
 
-            Dispatcher.UIThread.Invoke(() =>
+            App.Current?.Dispatcher.Invoke(() =>
             {
                 // 更新验证状态
                 OnPropertyChanged(nameof(StatusText));
@@ -295,6 +257,21 @@ namespace Lyxie_desktop.Views
                 OnPropertyChanged(nameof(ErrorMessage));
                 OnPropertyChanged(nameof(LastCheckedText));
             });
+        }
+        
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        protected bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value)) return false;
+            field = value;
+            OnPropertyChanged(propertyName);
+            return true;
         }
 
         /// <summary>
@@ -306,6 +283,117 @@ namespace Lyxie_desktop.Views
             {
                 _autoValidationService.ValidationCompleted -= OnValidationCompleted;
             }
+        }
+    }
+
+        public string Name
+        {
+            get => _name;
+            set => SetField(ref _name, value);
+        }
+
+        public McpServerDefinition Definition
+        {
+            get => _definition;
+            set 
+            { 
+                if (SetField(ref _definition, value))
+                {
+                    OnPropertyChanged(nameof(StatusText));
+                    OnPropertyChanged(nameof(IsAvailable));
+                    OnPropertyChanged(nameof(ValidationStatusText));
+                    OnPropertyChanged(nameof(ErrorMessage));
+                    OnPropertyChanged(nameof(LastCheckedText));
+                }
+            }
+        }
+
+        public string StatusText 
+        {
+            get
+            {
+                if (!IsEnabled) return "已禁用";
+                
+                return Definition.ValidationStatus switch
+                {
+                    McpValidationStatus.Available => "可用",
+                    McpValidationStatus.Unavailable => "不可用",
+                    McpValidationStatus.Validating => "验证中...",
+                    McpValidationStatus.Timeout => "超时",
+                    McpValidationStatus.ConfigurationError => "配置错误",
+                    McpValidationStatus.Unknown => "未知",
+                    _ => "未知"
+                };
+            }
+        }
+
+        public bool IsAvailable => IsEnabled && Definition.IsAvailable;
+
+        public string ValidationStatusText
+        {
+            get
+            {
+                if (!IsEnabled) return "";
+                
+                return Definition.ValidationStatus switch
+                {
+                    McpValidationStatus.Available => "✓ 验证成功",
+                    McpValidationStatus.Unavailable => "✗ 验证失败",
+                    McpValidationStatus.Validating => "⟳ 验证中...",
+                    McpValidationStatus.Timeout => "⏱ 验证超时",
+                    McpValidationStatus.ConfigurationError => "⚠ 配置错误",
+                    McpValidationStatus.Unknown => "? 未验证",
+                    _ => ""
+                };
+            }
+        }
+
+        public string? ErrorMessage => Definition.ErrorMessage;
+
+        public string LastCheckedText
+        {
+            get
+            {
+                if (Definition.LastChecked == null) return "";
+                var timeSpan = DateTime.Now - Definition.LastChecked.Value;
+                if (timeSpan.TotalMinutes < 1) return "刚刚验证";
+                if (timeSpan.TotalHours < 1) return $"{(int)timeSpan.TotalMinutes}分钟前";
+                if (timeSpan.TotalDays < 1) return $"{(int)timeSpan.TotalHours}小时前";
+                return $"{(int)timeSpan.TotalDays}天前";
+            }
+        }
+
+
+
+        public bool IsEnabled
+        {
+            get => Definition.IsEnabled;
+            set
+            {
+                if (Definition.IsEnabled != value)
+                {
+                    Definition.IsEnabled = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(StatusText));
+                    OnPropertyChanged(nameof(IsAvailable));
+                    _saveAction();
+                }
+            }
+        }
+        
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        protected bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value)) return false;
+            field = value;
+            OnPropertyChanged(propertyName);
+            return true;
         }
     }
 
@@ -453,8 +541,8 @@ namespace Lyxie_desktop.Views
             _llmApiService = new LlmApiService();
             _ttsApiService = new TtsApiService();
             _mcpService = new McpService();
-            // 获取自动验证服务实例 - 这里需要通过依赖注入或服务定位器
-            // 暂时创建新实例，实际项目中应使用依赖注入
+            // 需要通过服务定位器或依赖注入获取自动验证服务
+            // 这里暂时创建新实例，实际项目中应使用依赖注入
             _mcpAutoValidationService = new McpAutoValidationService(new McpServerManager());
 
             // 设置文件路径

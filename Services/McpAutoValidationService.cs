@@ -28,7 +28,7 @@ namespace Lyxie_desktop.Services
         /// <summary>
         /// 验证状态变化事件
         /// </summary>
-        public event EventHandler<McpValidationResult>? ValidationCompleted;
+        public event EventHandler<(string ServerName, McpValidationResult Result)>? ValidationCompleted;
 
         /// <summary>
         /// 自动验证是否正在运行
@@ -178,6 +178,32 @@ namespace Lyxie_desktop.Services
         }
 
         /// <summary>
+        /// 立即验证指定的单个服务器
+        /// </summary>
+        /// <param name="serverName">服务器名称</param>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>验证结果</returns>
+        public async Task<McpValidationResult?> ValidateServerImmediatelyAsync(string serverName, CancellationToken cancellationToken = default)
+        {
+            if (!_servers.TryGetValue(serverName, out var definition))
+            {
+                return null;
+            }
+
+            if (!definition.IsEnabled)
+            {
+                return null;
+            }
+
+            var result = await ValidateServerAsync(serverName, definition, cancellationToken);
+            
+            // 触发验证完成事件
+            ValidationCompleted?.Invoke(this, (serverName, result));
+            
+            return result;
+        }
+
+        /// <summary>
         /// 启动单个服务器的验证定时器
         /// </summary>
         private Task StartServerValidationTimer(string name, McpServerDefinition definition)
@@ -216,7 +242,7 @@ namespace Lyxie_desktop.Services
                 var result = await ValidateServerAsync(name, definition, _cancellationTokenSource?.Token ?? CancellationToken.None);
                 
                 // 触发验证完成事件
-                ValidationCompleted?.Invoke(this, result);
+                ValidationCompleted?.Invoke(this, (name, result));
             }
             catch (Exception)
             {

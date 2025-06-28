@@ -18,7 +18,7 @@ namespace Lyxie_desktop.Interfaces
         /// <summary>
         /// 验证状态变化事件
         /// </summary>
-        event EventHandler<Models.McpValidationResult>? ValidationCompleted;
+        event EventHandler<(string ServerName, Models.McpValidationResult Result)>? ValidationCompleted;
 
         /// <summary>
         /// 启动自动验证
@@ -60,5 +60,13 @@ namespace Lyxie_desktop.Interfaces
         /// </summary>
         /// <returns>验证结果字典</returns>
         Dictionary<string, Models.McpValidationResult> GetLastValidationResults();
+
+        /// <summary>
+        /// 立即验证指定的单个服务器
+        /// </summary>
+        /// <param name="serverName">服务器名称</param>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>验证结果</returns>
+        Task<Models.McpValidationResult?> ValidateServerImmediatelyAsync(string serverName, CancellationToken cancellationToken = default);
     }
 }
