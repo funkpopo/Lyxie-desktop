@@ -369,26 +369,7 @@
                             <!-- View for listing services -->
                             <Panel IsVisible="{Binding !IsEditingMcpFile}">
                                 <StackPanel Spacing="10">
-                                    <!-- Validation Controls -->
-                                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,10">
-                                        <Button Name="ValidateAllButton" Content="验证所有工具" 
-                                                Click="ValidateAllButton_Click"
-                                                Padding="10,5" FontSize="12"
-                                                Background="{DynamicResource ButtonBackgroundBrush}"
-                                                Foreground="{DynamicResource PrimaryTextBrush}"
-                                                BorderBrush="{DynamicResource ButtonBorderBrush}"
-                                                BorderThickness="1" CornerRadius="4" Cursor="Hand">
-                                            <Button.Styles>
-                                                <Style Selector="Button:pointerover">
-                                                    <Setter Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
-                                                </Style>
-                                            </Button.Styles>
-                                        </Button>
-                                        <TextBlock Name="ValidationStatusText" 
-                                                   VerticalAlignment="Center" FontSize="12"
-                                                   Foreground="{DynamicResource SecondaryTextBrush}"
-                                                   IsVisible="False"/>
-                                    </StackPanel>
+
 
                                     <!-- Services List -->
                                     <ItemsControl ItemsSource="{Binding McpServices}">
@@ -397,7 +378,7 @@
                                                 <Border Background="{DynamicResource CardBackgroundBrush}"
                                                         BorderBrush="{DynamicResource CardBorderBrush}"
                                                         BorderThickness="0,0,0,1" Padding="0,15">
-                                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto" VerticalAlignment="Center">
+                                                    <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto" VerticalAlignment="Center">
 
                                                         <!-- Name and Status -->
                                                         <StackPanel Grid.Column="0" Grid.Row="0" Spacing="2" VerticalAlignment="Center">
@@ -420,31 +401,15 @@
                                                                        IsVisible="{Binding LastCheckedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
                                                         </StackPanel>
 
-                                                        <!-- Validate Button -->
-                                                        <Button Grid.Column="1" Grid.RowSpan="2" 
-                                                                Content="验证" FontSize="11" Padding="8,4"
-                                                                Margin="10,0,5,0" VerticalAlignment="Center"
-                                                                IsEnabled="{Binding IsEnabled}"
-                                                                Click="ValidateServerButton_Click"
-                                                                Tag="{Binding}"
-                                                                Background="{DynamicResource ButtonBackgroundBrush}"
-                                                                Foreground="{DynamicResource PrimaryTextBrush}"
-                                                                BorderBrush="{DynamicResource ButtonBorderBrush}"
-                                                                BorderThickness="1" CornerRadius="3" Cursor="Hand">
-                                                            <Button.Styles>
-                                                                <Style Selector="Button:pointerover">
-                                                                    <Setter Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
-                                                                </Style>
-                                                            </Button.Styles>
-                                                        </Button>
+
 
                                                         <!-- Availability Dot -->
-                                                        <Ellipse Grid.Column="2" Grid.RowSpan="2" Width="12" Height="12" 
+                                                        <Ellipse Grid.Column="1" Grid.RowSpan="2" Width="12" Height="12" 
                                                                  Margin="10,0" VerticalAlignment="Center"
                                                                  Fill="{Binding IsAvailable, Converter={StaticResource BoolToBrushConverter}, ConverterParameter='#4CAF50,#FFC107'}"/>
 
                                                         <!-- Toggle Switch -->
-                                                        <ToggleSwitch Grid.Column="3" Grid.RowSpan="2" IsChecked="{Binding IsEnabled}"
+                                                        <ToggleSwitch Grid.Column="2" Grid.RowSpan="2" IsChecked="{Binding IsEnabled}"
                                                                       OnContent="" OffContent="" Margin="10,0,0,0"
                                                                       VerticalAlignment="Center"/>
                                                     </Grid>

@@ -30,16 +30,14 @@ namespace Lyxie_desktop.Views
     public class McpServiceViewModel : INotifyPropertyChanged
     {
         private readonly Func<Task> _saveAction;
-        private readonly Func<string, McpServerDefinition, Task> _validateAction;
         private string _name;
         private McpServerDefinition _definition;
 
-        public McpServiceViewModel(string name, McpServerDefinition definition, Func<Task> saveAction, Func<string, McpServerDefinition, Task>? validateAction = null)
+        public McpServiceViewModel(string name, McpServerDefinition definition, Func<Task> saveAction)
         {
             _name = name;
             _definition = definition;
             _saveAction = saveAction;
-            _validateAction = validateAction ?? ((_, _) => Task.CompletedTask);
         }
 
         public string Name
@@ -119,26 +117,7 @@ namespace Lyxie_desktop.Views
             }
         }
 
-        /// <summary>
-        /// 手动验证服务器
-        /// </summary>
-        public async Task ValidateAsync()
-        {
-            if (_validateAction != null)
-            {
-                Definition.ValidationStatus = McpValidationStatus.Validating;
-                OnPropertyChanged(nameof(StatusText));
-                OnPropertyChanged(nameof(ValidationStatusText));
-                
-                await _validateAction(Name, Definition);
-                
-                OnPropertyChanged(nameof(StatusText));
-                OnPropertyChanged(nameof(IsAvailable));
-                OnPropertyChanged(nameof(ValidationStatusText));
-                OnPropertyChanged(nameof(ErrorMessage));
-                OnPropertyChanged(nameof(LastCheckedText));
-            }
-        }
+
 
         public bool IsEnabled
         {
@@ -1324,7 +1303,7 @@ namespace Lyxie_desktop.Views
             McpServices.Clear();
             foreach (var config in configs)
             {
-                McpServices.Add(new McpServiceViewModel(config.Key, config.Value, SaveMcpChangesAsync, ValidateServerAsync));
+                McpServices.Add(new McpServiceViewModel(config.Key, config.Value, SaveMcpChangesAsync));
             }
             RaisePropertyChanged(nameof(IsMcpConfigPresent));
         }
@@ -1379,130 +1358,11 @@ namespace Lyxie_desktop.Views
             McpFileValidationError = string.Empty;
         }
 
-        /// <summary>
-        /// 验证所有按钮点击事件
-        /// </summary>
-        public async void ValidateAllButton_Click(object? sender, RoutedEventArgs e)
-        {
-            var button = sender as Button;
-            var statusText = this.FindControl<TextBlock>("ValidationStatusText");
 
-            if (button != null)
-            {
-                button.IsEnabled = false;
-                button.Content = "验证中...";
-            }
 
-            if (statusText != null)
-            {
-                statusText.Text = "正在验证所有MCP工具...";
-                statusText.IsVisible = true;
-            }
 
-            try
-            {
-                // 简单的模拟验证过程
-                await Task.Delay(2000);
 
-                var availableCount = McpServices.Count(s => s.IsEnabled);
-                var totalCount = McpServices.Count;
 
-                if (statusText != null)
-                {
-                    statusText.Text = $"验证完成: {availableCount}/{totalCount} 个工具可用";
-                    
-                    // 3秒后隐藏状态文本
-                    var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-                    timer.Tick += (s, args) =>
-                    {
-                        timer.Stop();
-                        statusText.IsVisible = false;
-                    };
-                    timer.Start();
-                }
-            }
-            catch (Exception ex)
-            {
-                if (statusText != null)
-                {
-                    statusText.Text = $"验证失败: {ex.Message}";
-                    statusText.Foreground = new SolidColorBrush(Color.Parse("#E57373"));
-                }
-            }
-            finally
-            {
-                if (button != null)
-                {
-                    button.IsEnabled = true;
-                    button.Content = "验证所有工具";
-                }
-            }
-        }
-
-        /// <summary>
-        /// 验证单个服务器
-        /// </summary>
-        private async Task ValidateServerAsync(string name, McpServerDefinition definition)
-        {
-            try
-            {
-                // 模拟验证过程
-                definition.ValidationStatus = McpValidationStatus.Validating;
-                await Task.Delay(1000);
-                
-                // 简单的验证逻辑 - 检查是否有基本配置
-                bool isValid = !string.IsNullOrEmpty(definition.Command) || !string.IsNullOrEmpty(definition.Url);
-                
-                if (isValid)
-                {
-                    definition.ValidationStatus = McpValidationStatus.Available;
-                    definition.IsAvailable = true;
-                    definition.ErrorMessage = null;
-                }
-                else
-                {
-                    definition.ValidationStatus = McpValidationStatus.ConfigurationError;
-                    definition.IsAvailable = false;
-                    definition.ErrorMessage = "缺少必要的配置信息";
-                }
-                
-                definition.LastChecked = DateTime.Now;
-                await SaveMcpChangesAsync();
-            }
-            catch (Exception ex)
-            {
-                definition.ValidationStatus = McpValidationStatus.Unavailable;
-                definition.ErrorMessage = $"验证失败: {ex.Message}";
-                definition.IsAvailable = false;
-                definition.LastChecked = DateTime.Now;
-            }
-        }
-
-        /// <summary>
-        /// 单个服务器验证按钮点击事件
-        /// </summary>
-        public async void ValidateServerButton_Click(object? sender, RoutedEventArgs e)
-        {
-            if (sender is Button button && button.Tag is McpServiceViewModel viewModel)
-            {
-                button.IsEnabled = false;
-                button.Content = "验证中...";
-
-                try
-                {
-                    await viewModel.ValidateAsync();
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Validation error: {ex.Message}");
-                }
-                finally
-                {
-                    button.IsEnabled = true;
-                    button.Content = "验证";
-                }
-            }
-        }
 
         // 初始化TTS API配置界面
         private void InitializeTtsApiConfigUI()

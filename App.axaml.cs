@@ -5,6 +5,7 @@ using Lyxie_desktop.Services;
 using Lyxie_desktop.Views;
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using Lyxie_desktop.Helpers;
 using Avalonia.Controls;
@@ -40,6 +41,9 @@ public partial class App : Application
         
         // 初始化聊天数据库
         InitializeChatDatabase();
+        
+        // 自动启动MCP服务和验证
+        InitializeMcpServices();
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -105,8 +109,20 @@ public partial class App : Application
         desktop.MainWindow.Activate();
     }
 
-    private void OnShutdown(object? sender, ShutdownRequestedEventArgs e)
+    private async void OnShutdown(object? sender, ShutdownRequestedEventArgs e)
     {
+        // 停止MCP服务
+        try
+        {
+            await McpService.StopAutoValidationAsync();
+            await McpService.StopAllServersAsync();
+            System.Diagnostics.Debug.WriteLine("MCP服务已停止");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to stop MCP services: {ex.Message}");
+        }
+        
         // 清理TTS缓存目录
         try
         {
@@ -174,6 +190,28 @@ public partial class App : Application
         catch (Exception ex)
         {
             Console.WriteLine($"Failed to initialize chat database: {ex.Message}");
+        }
+    }
+    
+    // 初始化MCP服务
+    private async void InitializeMcpServices()
+    {
+        try
+        {
+            System.Diagnostics.Debug.WriteLine("正在启动MCP服务...");
+            
+            // 启动所有已启用的MCP服务器
+            var startResults = await McpService.StartAllServersAsync();
+            var successCount = startResults.Count(r => r.Value);
+            System.Diagnostics.Debug.WriteLine($"MCP服务器启动完成: {successCount}/{startResults.Count} 个服务器启动成功");
+            
+            // 启动自动验证
+            await McpService.StartAutoValidationAsync();
+            System.Diagnostics.Debug.WriteLine("MCP自动验证已启动");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to initialize MCP services: {ex.Message}");
         }
     }
     
