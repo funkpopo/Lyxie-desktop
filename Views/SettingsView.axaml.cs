@@ -64,15 +64,6 @@ namespace Lyxie_desktop.Views
             }
         }
 
-        public MaterialIconKind IconKind => Name.ToLower() switch
-        {
-            "codelf" => MaterialIconKind.CodeTags,
-            "context7" => MaterialIconKind.BookOpenPageVariantOutline,
-            "serena" => MaterialIconKind.RobotOutline,
-            "filesystem" => MaterialIconKind.FolderOutline,
-            _ => MaterialIconKind.PuzzleOutline
-        };
-
         public string StatusText 
         {
             get

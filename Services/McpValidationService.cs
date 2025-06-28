@@ -345,29 +345,5 @@ namespace Lyxie_desktop.Services
         }
     }
 
-    /// <summary>
-    /// MCP验证结果
-    /// </summary>
-    public class McpValidationResult
-    {
-        /// <summary>
-        /// 是否可用
-        /// </summary>
-        public bool IsAvailable { get; set; }
 
-        /// <summary>
-        /// 验证状态
-        /// </summary>
-        public McpValidationStatus Status { get; set; }
-
-        /// <summary>
-        /// 错误信息
-        /// </summary>
-        public string? ErrorMessage { get; set; }
-
-        /// <summary>
-        /// 验证时间
-        /// </summary>
-        public DateTime ValidatedAt { get; set; } = DateTime.Now;
-    }
 }

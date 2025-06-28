@@ -397,15 +397,10 @@
                                                 <Border Background="{DynamicResource CardBackgroundBrush}"
                                                         BorderBrush="{DynamicResource CardBorderBrush}"
                                                         BorderThickness="0,0,0,1" Padding="0,15">
-                                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" RowDefinitions="Auto,Auto" VerticalAlignment="Center">
-                                                        <!-- Icon -->
-                                                        <materialIcons:MaterialIcon Kind="{Binding IconKind}" Grid.Column="0" Grid.RowSpan="2" 
-                                                                                    Width="24" Height="24"
-                                                                                    Foreground="{DynamicResource PrimaryTextBrush}" 
-                                                                                    Margin="0,0,15,0" VerticalAlignment="Center"/>
+                                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto" VerticalAlignment="Center">
 
                                                         <!-- Name and Status -->
-                                                        <StackPanel Grid.Column="1" Grid.Row="0" Spacing="2" VerticalAlignment="Center">
+                                                        <StackPanel Grid.Column="0" Grid.Row="0" Spacing="2" VerticalAlignment="Center">
                                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="16"
                                                                        Foreground="{DynamicResource PrimaryTextBrush}"/>
                                                             <TextBlock Text="{Binding StatusText}" FontSize="12"
@@ -413,7 +408,7 @@
                                                         </StackPanel>
 
                                                         <!-- Validation Details -->
-                                                        <StackPanel Grid.Column="1" Grid.Row="1" Spacing="2" Margin="0,5,0,0"
+                                                        <StackPanel Grid.Column="0" Grid.Row="1" Spacing="2" Margin="0,5,0,0"
                                                                     IsVisible="{Binding IsEnabled}">
                                                             <TextBlock Text="{Binding ValidationStatusText}" FontSize="11"
                                                                        Foreground="{DynamicResource SecondaryTextBrush}"/>
@@ -426,7 +421,7 @@
                                                         </StackPanel>
 
                                                         <!-- Validate Button -->
-                                                        <Button Grid.Column="2" Grid.RowSpan="2" 
+                                                        <Button Grid.Column="1" Grid.RowSpan="2" 
                                                                 Content="验证" FontSize="11" Padding="8,4"
                                                                 Margin="10,0,5,0" VerticalAlignment="Center"
                                                                 IsEnabled="{Binding IsEnabled}"
@@ -444,12 +439,12 @@
                                                         </Button>
 
                                                         <!-- Availability Dot -->
-                                                        <Ellipse Grid.Column="3" Grid.RowSpan="2" Width="12" Height="12" 
+                                                        <Ellipse Grid.Column="2" Grid.RowSpan="2" Width="12" Height="12" 
                                                                  Margin="10,0" VerticalAlignment="Center"
                                                                  Fill="{Binding IsAvailable, Converter={StaticResource BoolToBrushConverter}, ConverterParameter='#4CAF50,#FFC107'}"/>
 
                                                         <!-- Toggle Switch -->
-                                                        <ToggleSwitch Grid.Column="4" Grid.RowSpan="2" IsChecked="{Binding IsEnabled}"
+                                                        <ToggleSwitch Grid.Column="3" Grid.RowSpan="2" IsChecked="{Binding IsEnabled}"
                                                                       OnContent="" OffContent="" Margin="10,0,0,0"
                                                                       VerticalAlignment="Center"/>
                                                     </Grid>

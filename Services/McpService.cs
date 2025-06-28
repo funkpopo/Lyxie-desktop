@@ -10,153 +10,195 @@ using System.Threading.Tasks;
 namespace Lyxie_desktop.Services
 {
     public class McpService : IMcpService
-{
-    private readonly McpValidationService _validationService;
-
-    public McpService()
     {
-        _validationService = new McpValidationService();
-    }
+        private readonly McpValidationService _validationService;
+        private readonly IMcpServerManager _serverManager;
+        private readonly IMcpAutoValidationService _autoValidationService;
 
-    public Task<Dictionary<string, McpServerDefinition>> GetConfigsAsync()
-    {
-        return McpConfigHelper.LoadConfigsAsync();
-    }
-
-    public Task SaveConfigsAsync(Dictionary<string, McpServerDefinition> configs)
-    {
-        return McpConfigHelper.SaveConfigsAsync(configs);
-    }
-
-    /// <summary>
-    /// 验证单个MCP服务器的可用性
-    /// </summary>
-    /// <param name="name">服务器名称</param>
-    /// <param name="definition">服务器定义</param>
-    /// <param name="cancellationToken">取消令牌</param>
-    /// <returns>验证结果</returns>
-    public async Task<McpValidationResult> ValidateServerAsync(string name, McpServerDefinition definition, CancellationToken cancellationToken = default)
-    {
-        var result = await _validationService.ValidateServerAsync(name, definition, cancellationToken);
-        
-        // 更新服务器定义的状态
-        definition.IsAvailable = result.IsAvailable;
-        definition.ValidationStatus = result.Status;
-        definition.ErrorMessage = result.ErrorMessage;
-        definition.LastChecked = result.ValidatedAt;
-
-        return result;
-    }
-
-    /// <summary>
-    /// 验证所有MCP服务器的可用性
-    /// </summary>
-    /// <param name="cancellationToken">取消令牌</param>
-    /// <returns>验证结果字典</returns>
-    public async Task<Dictionary<string, McpValidationResult>> ValidateAllServersAsync(CancellationToken cancellationToken = default)
-    {
-        var configs = await GetConfigsAsync();
-        var results = await _validationService.ValidateServersAsync(configs, cancellationToken);
-
-        // 更新配置状态
-        foreach (var result in results)
+        public McpService()
         {
-            if (configs.TryGetValue(result.Key, out var definition))
-            {
-                definition.IsAvailable = result.Value.IsAvailable;
-                definition.ValidationStatus = result.Value.Status;
-                definition.ErrorMessage = result.Value.ErrorMessage;
-                definition.LastChecked = result.Value.ValidatedAt;
-            }
+            _validationService = new McpValidationService();
+            _serverManager = new McpServerManager();
+            _autoValidationService = new McpAutoValidationService(_serverManager);
         }
 
-        // 保存更新后的配置
-        await SaveConfigsAsync(configs);
+        /// <summary>
+        /// 自动验证是否正在运行
+        /// </summary>
+        public bool IsAutoValidationRunning => _autoValidationService.IsRunning;
 
-        return results;
-    }
-
-    /// <summary>
-    /// 获取服务器验证状态摘要
-    /// </summary>
-    /// <returns>状态摘要</returns>
-    public async Task<McpValidationSummary> GetValidationSummaryAsync()
-    {
-        var configs = await GetConfigsAsync();
-        var summary = new McpValidationSummary();
-
-        foreach (var config in configs.Values)
+        public Task<Dictionary<string, McpServerDefinition>> GetConfigsAsync()
         {
-            summary.TotalCount++;
+            return McpConfigHelper.LoadConfigsAsync();
+        }
+
+        public async Task SaveConfigsAsync(Dictionary<string, McpServerDefinition> configs)
+        {
+            await McpConfigHelper.SaveConfigsAsync(configs);
             
-            if (config.IsEnabled)
+            // 更新自动验证配置
+            await _autoValidationService.UpdateConfigurationAsync(configs);
+        }
+
+        /// <summary>
+        /// 验证单个MCP服务器的可用性
+        /// </summary>
+        /// <param name="name">服务器名称</param>
+        /// <param name="definition">服务器定义</param>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>验证结果</returns>
+        public async Task<McpValidationResult> ValidateServerAsync(string name, McpServerDefinition definition, CancellationToken cancellationToken = default)
+        {
+            var result = await _validationService.ValidateServerAsync(name, definition, cancellationToken);
+            
+            // 更新服务器定义的状态
+            definition.IsAvailable = result.IsAvailable;
+            definition.ValidationStatus = result.Status;
+            definition.ErrorMessage = result.ErrorMessage;
+            definition.LastChecked = result.ValidatedAt;
+
+            return result;
+        }
+
+        /// <summary>
+        /// 验证所有MCP服务器的可用性
+        /// </summary>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>验证结果字典</returns>
+        public async Task<Dictionary<string, McpValidationResult>> ValidateAllServersAsync(CancellationToken cancellationToken = default)
+        {
+            var configs = await GetConfigsAsync();
+            var results = await _validationService.ValidateServersAsync(configs, cancellationToken);
+
+            // 更新配置状态
+            foreach (var result in results)
             {
-                summary.EnabledCount++;
-                
-                switch (config.ValidationStatus)
+                if (configs.TryGetValue(result.Key, out var definition))
                 {
-                    case McpValidationStatus.Available:
-                        summary.AvailableCount++;
-                        break;
-                    case McpValidationStatus.Unavailable:
-                    case McpValidationStatus.Timeout:
-                    case McpValidationStatus.ConfigurationError:
-                        summary.UnavailableCount++;
-                        break;
-                    case McpValidationStatus.Unknown:
-                    case McpValidationStatus.Validating:
-                        summary.UnknownCount++;
-                        break;
+                    definition.IsAvailable = result.Value.IsAvailable;
+                    definition.ValidationStatus = result.Value.Status;
+                    definition.ErrorMessage = result.Value.ErrorMessage;
+                    definition.LastChecked = result.Value.ValidatedAt;
                 }
             }
-            else
-            {
-                summary.DisabledCount++;
-            }
+
+            // 保存更新后的配置
+            await SaveConfigsAsync(configs);
+
+            return results;
         }
 
-        return summary;
-    }
+        /// <summary>
+        /// 获取服务器验证状态摘要
+        /// </summary>
+        /// <returns>状态摘要</returns>
+        public async Task<McpValidationSummary> GetValidationSummaryAsync()
+        {
+            var configs = await GetConfigsAsync();
+            var summary = new McpValidationSummary();
 
-    public void Dispose()
-    {
-        _validationService?.Dispose();
+            foreach (var config in configs.Values)
+            {
+                summary.TotalCount++;
+                
+                if (config.IsEnabled)
+                {
+                    summary.EnabledCount++;
+                    
+                    switch (config.ValidationStatus)
+                    {
+                        case McpValidationStatus.Available:
+                            summary.AvailableCount++;
+                            break;
+                        case McpValidationStatus.Unavailable:
+                        case McpValidationStatus.Timeout:
+                        case McpValidationStatus.ConfigurationError:
+                            summary.UnavailableCount++;
+                            break;
+                        case McpValidationStatus.Unknown:
+                        case McpValidationStatus.Validating:
+                            summary.UnknownCount++;
+                            break;
+                    }
+                }
+                else
+                {
+                    summary.DisabledCount++;
+                }
+            }
+
+            return summary;
+        }
+
+        /// <summary>
+        /// 启动指定的MCP服务器
+        /// </summary>
+        public async Task<bool> StartServerAsync(string name, CancellationToken cancellationToken = default)
+        {
+            var configs = await GetConfigsAsync();
+            if (configs.TryGetValue(name, out var definition))
+            {
+                return await _serverManager.StartServerAsync(name, definition, cancellationToken);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 停止指定的MCP服务器
+        /// </summary>
+        public async Task<bool> StopServerAsync(string name, CancellationToken cancellationToken = default)
+        {
+            return await _serverManager.StopServerAsync(name, cancellationToken);
+        }
+
+        /// <summary>
+        /// 启动所有已启用的MCP服务器
+        /// </summary>
+        public async Task<Dictionary<string, bool>> StartAllServersAsync(CancellationToken cancellationToken = default)
+        {
+            var configs = await GetConfigsAsync();
+            return await _serverManager.StartAllServersAsync(configs, cancellationToken);
+        }
+
+        /// <summary>
+        /// 停止所有正在运行的MCP服务器
+        /// </summary>
+        public async Task<Dictionary<string, bool>> StopAllServersAsync(CancellationToken cancellationToken = default)
+        {
+            return await _serverManager.StopAllServersAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// 启动自动验证
+        /// </summary>
+        public async Task StartAutoValidationAsync(CancellationToken cancellationToken = default)
+        {
+            var configs = await GetConfigsAsync();
+            await _autoValidationService.UpdateConfigurationAsync(configs);
+            await _autoValidationService.StartAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// 停止自动验证
+        /// </summary>
+        public async Task StopAutoValidationAsync(CancellationToken cancellationToken = default)
+        {
+            await _autoValidationService.StopAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// 获取正在运行的服务器列表
+        /// </summary>
+        public IEnumerable<string> GetRunningServers()
+        {
+            return _serverManager.GetRunningServers();
+        }
+
+        public void Dispose()
+        {
+            _validationService?.Dispose();
+            _serverManager?.Dispose();
+            _autoValidationService?.Dispose();
+        }
     }
 }
-
-    /// <summary>
-    /// MCP验证状态摘要
-    /// </summary>
-    public class McpValidationSummary
-    {
-        /// <summary>
-        /// 总服务器数量
-        /// </summary>
-        public int TotalCount { get; set; }
-
-        /// <summary>
-        /// 已启用服务器数量
-        /// </summary>
-        public int EnabledCount { get; set; }
-
-        /// <summary>
-        /// 已禁用服务器数量
-        /// </summary>
-        public int DisabledCount { get; set; }
-
-        /// <summary>
-        /// 可用服务器数量
-        /// </summary>
-        public int AvailableCount { get; set; }
-
-        /// <summary>
-        /// 不可用服务器数量
-        /// </summary>
-        public int UnavailableCount { get; set; }
-
-        /// <summary>
-        /// 未知状态服务器数量
-        /// </summary>
-        public int UnknownCount { get; set; }
-    }
-} 
