@@ -368,40 +368,96 @@
 
                             <!-- View for listing services -->
                             <Panel IsVisible="{Binding !IsEditingMcpFile}">
-                                <ItemsControl ItemsSource="{Binding McpServices}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:McpServiceViewModel">
-                                            <Border Background="{DynamicResource CardBackgroundBrush}"
-                                                    BorderBrush="{DynamicResource CardBorderBrush}"
-                                                    BorderThickness="0,0,0,1" Padding="0,10">
-                                                <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto" VerticalAlignment="Center">
-                                                    <!-- Icon -->
-                                                    <materialIcons:MaterialIcon Kind="{Binding IconKind}" Grid.Column="0" Width="24" Height="24"
-                                                                                Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,0,15,0"
-                                                                                VerticalAlignment="Center"/>
+                                <StackPanel Spacing="10">
+                                    <!-- Validation Controls -->
+                                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,10">
+                                        <Button Name="ValidateAllButton" Content="验证所有工具" 
+                                                Click="ValidateAllButton_Click"
+                                                Padding="10,5" FontSize="12"
+                                                Background="{DynamicResource ButtonBackgroundBrush}"
+                                                Foreground="{DynamicResource PrimaryTextBrush}"
+                                                BorderBrush="{DynamicResource ButtonBorderBrush}"
+                                                BorderThickness="1" CornerRadius="4" Cursor="Hand">
+                                            <Button.Styles>
+                                                <Style Selector="Button:pointerover">
+                                                    <Setter Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                                                </Style>
+                                            </Button.Styles>
+                                        </Button>
+                                        <TextBlock Name="ValidationStatusText" 
+                                                   VerticalAlignment="Center" FontSize="12"
+                                                   Foreground="{DynamicResource SecondaryTextBrush}"
+                                                   IsVisible="False"/>
+                                    </StackPanel>
 
-                                                    <!-- Name and Status -->
-                                                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="16"
-                                                                   Foreground="{DynamicResource PrimaryTextBrush}"/>
-                                                        <TextBlock Text="{Binding StatusText}" FontSize="12"
-                                                                   Foreground="{DynamicResource SecondaryTextBrush}"/>
-                                                    </StackPanel>
+                                    <!-- Services List -->
+                                    <ItemsControl ItemsSource="{Binding McpServices}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:McpServiceViewModel">
+                                                <Border Background="{DynamicResource CardBackgroundBrush}"
+                                                        BorderBrush="{DynamicResource CardBorderBrush}"
+                                                        BorderThickness="0,0,0,1" Padding="0,15">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" RowDefinitions="Auto,Auto" VerticalAlignment="Center">
+                                                        <!-- Icon -->
+                                                        <materialIcons:MaterialIcon Kind="{Binding IconKind}" Grid.Column="0" Grid.RowSpan="2" 
+                                                                                    Width="24" Height="24"
+                                                                                    Foreground="{DynamicResource PrimaryTextBrush}" 
+                                                                                    Margin="0,0,15,0" VerticalAlignment="Center"/>
 
-                                                    <!-- Availability Dot -->
-                                                    <Ellipse Grid.Column="2" Width="10" Height="10" Margin="15,0"
-                                                             Fill="{Binding IsAvailable, Converter={StaticResource BoolToBrushConverter}, ConverterParameter='Green,#404040'}"
-                                                             VerticalAlignment="Center"/>
+                                                        <!-- Name and Status -->
+                                                        <StackPanel Grid.Column="1" Grid.Row="0" Spacing="2" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="16"
+                                                                       Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                                            <TextBlock Text="{Binding StatusText}" FontSize="12"
+                                                                       Foreground="{DynamicResource SecondaryTextBrush}"/>
+                                                        </StackPanel>
 
-                                                    <!-- Toggle Switch -->
-                                                    <ToggleSwitch Grid.Column="3" IsChecked="{Binding IsEnabled}"
-                                                                  OnContent="" OffContent="" Margin="5,0,0,0"
-                                                                  VerticalAlignment="Center"/>
-                                                </Grid>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                                        <!-- Validation Details -->
+                                                        <StackPanel Grid.Column="1" Grid.Row="1" Spacing="2" Margin="0,5,0,0"
+                                                                    IsVisible="{Binding IsEnabled}">
+                                                            <TextBlock Text="{Binding ValidationStatusText}" FontSize="11"
+                                                                       Foreground="{DynamicResource SecondaryTextBrush}"/>
+                                                            <TextBlock Text="{Binding ErrorMessage}" FontSize="10"
+                                                                       Foreground="#E57373" TextWrapping="Wrap"
+                                                                       IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                                                            <TextBlock Text="{Binding LastCheckedText}" FontSize="10"
+                                                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                                                       IsVisible="{Binding LastCheckedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                                                        </StackPanel>
+
+                                                        <!-- Validate Button -->
+                                                        <Button Grid.Column="2" Grid.RowSpan="2" 
+                                                                Content="验证" FontSize="11" Padding="8,4"
+                                                                Margin="10,0,5,0" VerticalAlignment="Center"
+                                                                IsEnabled="{Binding IsEnabled}"
+                                                                Click="ValidateServerButton_Click"
+                                                                Tag="{Binding}"
+                                                                Background="{DynamicResource ButtonBackgroundBrush}"
+                                                                Foreground="{DynamicResource PrimaryTextBrush}"
+                                                                BorderBrush="{DynamicResource ButtonBorderBrush}"
+                                                                BorderThickness="1" CornerRadius="3" Cursor="Hand">
+                                                            <Button.Styles>
+                                                                <Style Selector="Button:pointerover">
+                                                                    <Setter Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                                                                </Style>
+                                                            </Button.Styles>
+                                                        </Button>
+
+                                                        <!-- Availability Dot -->
+                                                        <Ellipse Grid.Column="3" Grid.RowSpan="2" Width="12" Height="12" 
+                                                                 Margin="10,0" VerticalAlignment="Center"
+                                                                 Fill="{Binding IsAvailable, Converter={StaticResource BoolToBrushConverter}, ConverterParameter='#4CAF50,#FFC107'}"/>
+
+                                                        <!-- Toggle Switch -->
+                                                        <ToggleSwitch Grid.Column="4" Grid.RowSpan="2" IsChecked="{Binding IsEnabled}"
+                                                                      OnContent="" OffContent="" Margin="10,0,0,0"
+                                                                      VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
                                 
                                 <TextBlock Text="MCP 工具配置为空，请点击“统一编辑”添加配置。" 
                                            FontSize="14"
