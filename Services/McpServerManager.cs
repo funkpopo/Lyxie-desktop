@@ -45,9 +45,10 @@ namespace Lyxie_desktop.Services
                 return true;
             }
 
-            // 检查是否已经在运行
+            // 检查是否已经在运行（包括外部启动的进程）
             if (IsServerRunning(name))
             {
+                definition.IsRunning = true;
                 return true;
             }
 
@@ -227,7 +228,52 @@ namespace Lyxie_desktop.Services
                 }
             }
 
+            // 检查是否有外部启动的同类进程
+            if (definition != null && !string.IsNullOrEmpty(definition.Command))
+            {
+                return IsExternalProcessRunning(definition.Command, definition.Args);
+            }
+
             return false;
+        }
+
+        /// <summary>
+        /// 检查是否有外部启动的进程
+        /// </summary>
+        private bool IsExternalProcessRunning(string command, List<string>? args)
+        {
+            try
+            {
+                var processName = System.IO.Path.GetFileNameWithoutExtension(command);
+                var processes = Process.GetProcessesByName(processName);
+                
+                foreach (var process in processes)
+                {
+                    try
+                    {
+                        // 基本的进程名匹配
+                        if (process.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            // 如果有参数，尝试匹配命令行（Windows限制，可能无法获取）
+                            // 这里只做基础检查，避免误判
+                            process.Dispose();
+                            return true;
+                        }
+                        process.Dispose();
+                    }
+                    catch
+                    {
+                        // 无法访问进程信息，跳过
+                        process.Dispose();
+                    }
+                }
+                
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>

@@ -7,6 +7,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Lyxie_desktop.Helpers;
 using Avalonia.Controls;
 using Avalonia.Media.Imaging;
@@ -208,6 +209,22 @@ public partial class App : Application
             // 启动自动验证
             await McpService.StartAutoValidationAsync();
             System.Diagnostics.Debug.WriteLine("MCP自动验证已启动");
+            
+            // 延迟触发一次完整验证，确保状态同步
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(2000); // 等待2秒让服务器充分启动
+                try
+                {
+                    var validationResults = await McpService.AutoValidationService.TriggerValidationAsync();
+                    var validatedCount = validationResults.Count(r => r.Value.IsAvailable);
+                    System.Diagnostics.Debug.WriteLine($"启动后验证完成: {validatedCount}/{validationResults.Count} 个服务器验证成功");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"启动后验证失败: {ex.Message}");
+                }
+            });
         }
         catch (Exception ex)
         {

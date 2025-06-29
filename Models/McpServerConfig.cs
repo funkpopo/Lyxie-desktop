@@ -40,6 +40,18 @@ namespace Lyxie_desktop.Models
     public int ValidationInterval { get; set; } = 60;
 
     /// <summary>
+    /// SSE端点URL（用于验证SSE连接）
+    /// </summary>
+    [JsonProperty("sseUrl", NullValueHandling = NullValueHandling.Ignore)]
+    public string? SseUrl { get; set; }
+
+    /// <summary>
+    /// 连接超时时间（秒），默认10秒
+    /// </summary>
+    [JsonProperty("connectionTimeout")]
+    public int ConnectionTimeout { get; set; } = 10;
+
+    /// <summary>
     /// 实际可用性状态，通过MCP协议验证确定
     /// </summary>
     [JsonIgnore]

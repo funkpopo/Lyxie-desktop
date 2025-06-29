@@ -230,6 +230,16 @@ namespace Lyxie_desktop.Services
             return _serverManager.GetRunningServers();
         }
 
+        /// <summary>
+        /// 检查指定服务器是否正在运行
+        /// </summary>
+        /// <param name="name">服务器名称</param>
+        /// <returns>是否正在运行</returns>
+        public bool IsServerRunning(string name)
+        {
+            return _serverManager.IsServerRunning(name);
+        }
+
         public void Dispose()
         {
             _validationService?.Dispose();

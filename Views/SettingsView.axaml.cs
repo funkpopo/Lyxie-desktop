@@ -48,6 +48,9 @@ namespace Lyxie_desktop.Views
             
             // 订阅验证完成事件
             _autoValidationService.ValidationCompleted += OnValidationCompleted;
+            
+            // 初始化时同步一次运行状态
+            SyncServerRunningState();
         }
 
         /// <summary>
@@ -97,24 +100,37 @@ namespace Lyxie_desktop.Views
                 if (IsLoading) return OperationStatus;
                 if (!IsEnabled) return "已禁用";
                 
-                // 验证状态为"可用"时，优先显示"可用"，无论运行状态如何
-                if (Definition.ValidationStatus == McpValidationStatus.Available)
-                    return "可用";
-                    
-                // 未运行的stdio服务器显示"已停止"
-                if (!Definition.IsRunning && Definition.IsStdioServer) 
-                    return "已停止";
-                
-                return Definition.ValidationStatus switch
+                // 优先显示验证状态，如果验证结果明确则显示验证结果
+                switch (Definition.ValidationStatus)
                 {
-                    // Available已在上面处理，此处不再需要
-                    McpValidationStatus.Unavailable => "不可用",
-                    McpValidationStatus.Validating => "验证中...",
-                    McpValidationStatus.Timeout => "超时",
-                    McpValidationStatus.ConfigurationError => "配置错误",
-                    McpValidationStatus.Unknown => "未知",
-                    _ => "未知"
-                };
+                    case McpValidationStatus.Available:
+                        return "可用";
+                    case McpValidationStatus.Unavailable:
+                        return "不可用";
+                    case McpValidationStatus.Validating:
+                        return "验证中...";
+                    case McpValidationStatus.Timeout:
+                        return "超时";
+                    case McpValidationStatus.ConfigurationError:
+                        return "配置错误";
+                    case McpValidationStatus.Unknown:
+                        // 只有在验证状态为未知时才检查运行状态
+                        if (Definition.IsStdioServer)
+                        {
+                            // 重新检查实际运行状态
+                            var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
+                            if (isActuallyRunning)
+                            {
+                                // 如果进程实际在运行但验证状态未知，触发验证
+                                _ = Task.Run(async () => await TriggerValidationAsync());
+                                return "检查中...";
+                            }
+                            return Definition.IsRunning ? "运行中" : "已停止";
+                        }
+                        return Definition.IsHttpServer && Definition.IsRunning ? "运行中" : "未验证";
+                    default:
+                        return "未知";
+                }
             }
         }
 
@@ -201,7 +217,11 @@ namespace Lyxie_desktop.Views
                     if (success)
                     {
                         Definition.IsEnabled = true;
-                        Definition.IsRunning = true; // 设置为运行状态
+                        
+                        // 同步实际运行状态
+                        var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
+                        Definition.IsRunning = isActuallyRunning;
+                        
                         OperationStatus = "验证中...";
                         
                         // 立即验证服务器状态
@@ -209,8 +229,21 @@ namespace Lyxie_desktop.Views
                     }
                     else
                     {
-                        OperationStatus = "启动失败";
-                        await Task.Delay(2000).ConfigureAwait(false);
+                        // 启动失败时，检查是否是因为进程已存在
+                        var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
+                        if (isActuallyRunning)
+                        {
+                            Definition.IsEnabled = true;
+                            Definition.IsRunning = true;
+                            OperationStatus = "验证中...";
+                            await _mcpService.ValidateServerAsync(_name, Definition).ConfigureAwait(false);
+                            success = true;
+                        }
+                        else
+                        {
+                            OperationStatus = "启动失败";
+                            await Task.Delay(2000).ConfigureAwait(false);
+                        }
                     }
                 }
                 else
@@ -278,6 +311,61 @@ namespace Lyxie_desktop.Views
         }
 
         /// <summary>
+        /// 同步服务器运行状态
+        /// </summary>
+        private void SyncServerRunningState()
+        {
+            try
+            {
+                // 检查服务器实际运行状态
+                var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
+                
+                // 如果实际状态与配置状态不一致，更新配置
+                if (Definition.IsRunning != isActuallyRunning)
+                {
+                    Definition.IsRunning = isActuallyRunning;
+                    
+                    // 如果服务器实际在运行但配置显示未运行，可能是外部启动的
+                    if (isActuallyRunning && !Definition.IsRunning)
+                    {
+                        Definition.IsEnabled = true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"同步运行状态失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 触发验证
+        /// </summary>
+        private async Task TriggerValidationAsync()
+        {
+            try
+            {
+                var result = await _autoValidationService.ValidateServerImmediatelyAsync(_name);
+                if (result != null)
+                {
+                    Dispatcher.UIThread.Invoke(() =>
+                    {
+                        // 强制刷新UI状态
+                        OnPropertyChanged(nameof(StatusText));
+                        OnPropertyChanged(nameof(IsAvailable));
+                        OnPropertyChanged(nameof(ValidationStatusText));
+                        OnPropertyChanged(nameof(ErrorMessage));
+                        OnPropertyChanged(nameof(LastCheckedText));
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"验证失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// 验证完成事件处理
         /// </summary>
         private void OnValidationCompleted(object? sender, (string ServerName, McpValidationResult Result) e)
@@ -288,6 +376,9 @@ namespace Lyxie_desktop.Views
 
             Dispatcher.UIThread.Invoke(() =>
             {
+                // 同步服务器实际运行状态
+                SyncServerRunningState();
+                
                 // 更新验证状态
                 OnPropertyChanged(nameof(StatusText));
                 OnPropertyChanged(nameof(IsAvailable));
@@ -1464,10 +1555,30 @@ namespace Lyxie_desktop.Views
         {
             var configs = await McpConfigHelper.LoadConfigsAsync();
             McpServices.Clear();
+            
+            // 获取当前实际运行的服务器列表
+            var runningServers = _mcpService.GetRunningServers().ToHashSet();
+            
             foreach (var config in configs)
             {
+                // 同步实际运行状态
+                if (config.Value.IsStdioServer)
+                {
+                    var isActuallyRunning = runningServers.Contains(config.Key);
+                    config.Value.IsRunning = isActuallyRunning;
+                    
+                    // 如果实际在运行但配置显示未启用，可能是外部启动的
+                    if (isActuallyRunning && !config.Value.IsEnabled)
+                    {
+                        config.Value.IsEnabled = true;
+                    }
+                }
+                
                 McpServices.Add(new McpServiceViewModel(config.Key, config.Value, SaveMcpChangesAsync, _mcpService, _mcpAutoValidationService));
             }
+            
+            // 保存同步后的配置
+            await SaveMcpChangesAsync();
             RaisePropertyChanged(nameof(IsMcpConfigPresent));
         }
 

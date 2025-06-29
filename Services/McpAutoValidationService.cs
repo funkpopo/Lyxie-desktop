@@ -273,6 +273,10 @@ namespace Lyxie_desktop.Services
                 {
                     // 本地服务器仍在运行，但MCP验证失败，可能是初始化中或暂时不可用
                     // 不需要重启，下次验证可能会成功
+                    // 对于外部启动的进程，只要进程存在就认为可用
+                    result.IsAvailable = true;
+                    result.Status = McpValidationStatus.Available;
+                    result.ErrorMessage = "进程存在（外部启动或初始化中）";
                 }
 
                 _lastResults.AddOrUpdate(name, result, (k, v) => result);

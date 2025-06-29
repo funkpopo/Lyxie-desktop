@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Lyxie_desktop.Interfaces;
 using Lyxie_desktop.Models;
+using Lyxie_desktop.Helpers;
 using Newtonsoft.Json;
 
 namespace Lyxie_desktop.Services
@@ -108,7 +109,38 @@ namespace Lyxie_desktop.Services
         {
             try
             {
-                // 构建MCP初始化请求
+                // 1. 先进行基础网络连通性检查
+                var (host, port) = NetworkHelper.ExtractHostAndPort(definition.Url!);
+                if (!string.IsNullOrEmpty(host) && port > 0)
+                {
+                    var isReachable = await NetworkHelper.IsPortReachableAsync(host, port, definition.ConnectionTimeout * 1000);
+                    if (!isReachable)
+                    {
+                        return new McpValidationResult
+                        {
+                            IsAvailable = false,
+                            Status = McpValidationStatus.Unavailable,
+                            ErrorMessage = $"无法连接到服务器 {host}:{port}"
+                        };
+                    }
+                }
+
+                // 2. 如果配置了SSE端点，先测试SSE连接
+                if (!string.IsNullOrEmpty(definition.SseUrl))
+                {
+                    var sseTestResult = await NetworkHelper.TestSseConnectionAsync(definition.SseUrl, cancellationToken);
+                    if (!sseTestResult)
+                    {
+                        return new McpValidationResult
+                        {
+                            IsAvailable = false,
+                            Status = McpValidationStatus.Unavailable,
+                            ErrorMessage = "SSE端点连接失败"
+                        };
+                    }
+                }
+
+                // 3. 进行标准MCP协议验证
                 var initRequest = new
                 {
                     jsonrpc = "2.0",
@@ -197,7 +229,7 @@ namespace Lyxie_desktop.Services
                 };
             }
 
-            // 1. 检查服务器是否正在运行
+            // 1. 检查服务器进程是否存在（包括外部启动的进程）
             if (!_serverManager.IsServerRunning(name))
             {
                 return new McpValidationResult
@@ -210,7 +242,7 @@ namespace Lyxie_desktop.Services
             
             try
             {
-                // 2. 构建MCP初始化请求
+                // 2. 进行标准MCP协议验证
                 var requestId = Guid.NewGuid().ToString();
                 var initRequest = new
                 {
@@ -234,19 +266,33 @@ namespace Lyxie_desktop.Services
                 };
                 var jsonRequest = JsonConvert.SerializeObject(initRequest);
 
-                // 3. 发送请求并等待响应
-                var responseLine = await _serverManager.SendRequestAndReadResponseAsync(name, jsonRequest, cancellationToken);
-
-                if (!string.IsNullOrEmpty(responseLine))
+                // 3. 发送请求并等待响应（仅对内部管理的进程）
+                // 对于外部进程，仅检查进程存在性即可
+                if (_serverManager.IsServerRunning(name))
                 {
-                    var mcpResponse = JsonConvert.DeserializeObject<dynamic>(responseLine);
-                    if (mcpResponse?.result != null && mcpResponse?.id == requestId)
+                    var responseLine = await _serverManager.SendRequestAndReadResponseAsync(name, jsonRequest, cancellationToken);
+
+                    if (!string.IsNullOrEmpty(responseLine))
                     {
+                        var mcpResponse = JsonConvert.DeserializeObject<dynamic>(responseLine);
+                        if (mcpResponse?.result != null && mcpResponse?.id == requestId)
+                        {
+                            return new McpValidationResult
+                            {
+                                IsAvailable = true,
+                                Status = McpValidationStatus.Available,
+                                ErrorMessage = null
+                            };
+                        }
+                    }
+                    else
+                    {
+                        // 如果无法通信但进程存在，可能是外部启动的进程
                         return new McpValidationResult
                         {
                             IsAvailable = true,
                             Status = McpValidationStatus.Available,
-                            ErrorMessage = null
+                            ErrorMessage = "进程存在（外部启动）"
                         };
                     }
                 }
