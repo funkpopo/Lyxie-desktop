@@ -61,6 +61,9 @@ public partial class MainView : UserControl
     private ChatSidebarControl? _chatSidebar;
     private ChatHistory _chatHistory = new();
     private ChatSession? _currentSession;
+    
+    // MCP工具管理器
+    private McpToolManager? _mcpToolManager;
 
     public MainView()
     {
@@ -133,6 +136,9 @@ public partial class MainView : UserControl
         
         // 初始化聊天历史和侧边栏
         InitializeChatHistory();
+        
+        // 初始化MCP工具管理器
+        InitializeMcpToolManager();
     }
     
     // 初始化工具面板开关状态
@@ -1691,6 +1697,42 @@ public partial class MainView : UserControl
             
             System.Diagnostics.Debug.WriteLine($"使用LLM配置: {config.Name} ({config.ModelName}) - {config.ApiUrl}");
 
+            // 获取MCP工具调用上下文
+            string? toolContext = null;
+            if (_mcpToolManager != null)
+            {
+                try
+                {
+                    System.Diagnostics.Debug.WriteLine("开始获取MCP工具调用上下文...");
+                    var mcpContext = await _mcpToolManager.GenerateToolContextAsync(message, _cancellationTokenSource.Token);
+                    
+                    if (mcpContext.Results.Count > 0)
+                    {
+                        toolContext = mcpContext.GetFormattedResults();
+                        System.Diagnostics.Debug.WriteLine($"MCP工具调用完成，获得 {mcpContext.Results.Count} 个结果");
+                        
+                        // 在UI中显示工具调用状态
+                        await Dispatcher.UIThread.InvokeAsync(() =>
+                        {
+                            var toolInfoBubble = new MessageBubble();
+                            toolInfoBubble.SetMessage($"🔧 已调用 {mcpContext.Results.Count} 个相关工具获取信息", false, "工具");
+                            toolInfoBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                            messageList.Children.Add(toolInfoBubble);
+                            messageScrollViewer?.ScrollToEnd();
+                        });
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("未找到相关的MCP工具或工具调用失败");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"MCP工具调用异常: {ex.Message}");
+                    // 工具调用失败不影响正常的LLM对话
+                }
+            }
+
             // 在UI线程中创建AI消息气泡并初始化为流式模式
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -1707,6 +1749,7 @@ public partial class MainView : UserControl
             var success = await apiService.SendStreamingMessageAsync(
                 config,
                 message,
+                toolContext, // 传递工具调用上下文
                 onDataReceived: (content, isComplete) =>
                 {
                     if (aiBubble != null)
@@ -1913,6 +1956,41 @@ public partial class MainView : UserControl
         }
     }
     
+    /// <summary>
+    /// 初始化MCP工具管理器
+    /// </summary>
+    private void InitializeMcpToolManager()
+    {
+        try
+        {
+            var mcpService = new McpService();
+            var serverManager = new McpServerManager();
+            _mcpToolManager = new McpToolManager(mcpService, serverManager);
+            
+            // 订阅工具调用状态事件
+            _mcpToolManager.ToolCallStatusChanged += OnToolCallStatusChanged;
+            
+            Debug.WriteLine("MCP工具管理器初始化成功");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"MCP工具管理器初始化失败: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// 工具调用状态变化处理
+    /// </summary>
+    private void OnToolCallStatusChanged(object? sender, ToolCallStatusEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            Debug.WriteLine($"工具调用状态: {e.Status} - {e.ToolName} ({e.ServerName}): {e.Message}");
+            
+            // 可以在这里添加UI状态更新，比如显示工具调用进度
+        });
+    }
+
     #region TTS功能
     
     /// <summary>
@@ -2066,6 +2144,24 @@ public partial class MainView : UserControl
     }
     
     #endregion
+    
+    /// <summary>
+    /// 释放资源
+    /// </summary>
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        try
+        {
+            _mcpToolManager?.Dispose();
+            _ttsApiService?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"释放资源时发生异常: {ex.Message}");
+        }
+        
+        base.OnDetachedFromVisualTree(e);
+    }
 
     #endregion
 }

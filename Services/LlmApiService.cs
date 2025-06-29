@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Text;
@@ -99,6 +100,20 @@ namespace Lyxie_desktop.Services
             StreamingErrorCallback? onError = null,
             CancellationToken cancellationToken = default)
         {
+            return await SendStreamingMessageAsync(config, message, null, onDataReceived, onError, cancellationToken);
+        }
+
+        /// <summary>
+        /// 发送流式消息请求（支持工具调用上下文）
+        /// </summary>
+        public async Task<bool> SendStreamingMessageAsync(
+            LlmApiConfig config,
+            string message,
+            string? toolContext,
+            StreamingDataCallback onDataReceived,
+            StreamingErrorCallback? onError = null,
+            CancellationToken cancellationToken = default)
+        {
             try
             {
                 if (string.IsNullOrWhiteSpace(config.ApiUrl) || string.IsNullOrWhiteSpace(config.ApiKey))
@@ -108,13 +123,20 @@ namespace Lyxie_desktop.Services
                 }
 
                 // 构建流式请求数据
+                var messages = new List<object>();
+                
+                // 如果有工具调用上下文，先添加系统消息
+                if (!string.IsNullOrEmpty(toolContext))
+                {
+                    messages.Add(new { role = "system", content = $"以下是相关的工具调用结果，请基于这些信息回答用户的问题：\n\n{toolContext}" });
+                }
+                
+                messages.Add(new { role = "user", content = message });
+
                 var requestData = new
                 {
                     model = config.ModelName,
-                    messages = new[]
-                    {
-                        new { role = "user", content = message }
-                    },
+                    messages = messages.ToArray(),
                     temperature = config.Temperature,
                     max_tokens = config.MaxTokens,
                     stream = true // 启用流式响应
