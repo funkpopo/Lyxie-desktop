@@ -54,5 +54,14 @@ namespace Lyxie_desktop.Interfaces
         /// <param name="cancellationToken">取消令牌</param>
         /// <returns>停止结果字典</returns>
         Task<Dictionary<string, bool>> StopAllServersAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 向指定的stdio服务器发送请求并异步读取响应
+        /// </summary>
+        /// <param name="name">服务器名称</param>
+        /// <param name="request">要发送的请求字符串</param>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>服务器的响应字符串，如果超时或失败则返回null</returns>
+        Task<string?> SendRequestAndReadResponseAsync(string name, string request, CancellationToken cancellationToken = default);
     }
 }

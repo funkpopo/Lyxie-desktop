@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Lyxie_desktop.Interfaces;
@@ -15,14 +16,14 @@ namespace Lyxie_desktop.Services
     /// </summary>
     public class McpServerManager : IMcpServerManager
     {
-        private readonly ConcurrentDictionary<string, Process> _runningProcesses;
+        private readonly ConcurrentDictionary<string, ManagedProcess> _runningProcesses;
         private readonly ConcurrentDictionary<string, McpServerDefinition> _serverDefinitions;
         private readonly object _lockObject = new object();
         private bool _disposed = false;
 
         public McpServerManager()
         {
-            _runningProcesses = new ConcurrentDictionary<string, Process>();
+            _runningProcesses = new ConcurrentDictionary<string, ManagedProcess>();
             _serverDefinitions = new ConcurrentDictionary<string, McpServerDefinition>();
         }
 
@@ -75,28 +76,32 @@ namespace Lyxie_desktop.Services
                 
                 // 设置进程退出事件处理
                 process.EnableRaisingEvents = true;
-                process.Exited += (sender, e) => OnProcessExited(name, process);
+                process.Exited += (sender, e) => OnProcessExited(name, (Process)sender!);
+                
+                var managedProcess = new ManagedProcess(name, process, this);
 
-                if (process.Start())
+                if (managedProcess.Process.Start())
                 {
-                    _runningProcesses.TryAdd(name, process);
+                    // 开始异步读取输出
+                    managedProcess.Process.BeginOutputReadLine();
+                    managedProcess.Process.BeginErrorReadLine();
+
+                    _runningProcesses.TryAdd(name, managedProcess);
                     definition.IsRunning = true;
-                    definition.ProcessId = process.Id;
+                    definition.ProcessId = managedProcess.Process.Id;
                     
                     // 等待一小段时间确保进程稳定启动
                     await Task.Delay(500, cancellationToken);
                     
                     // 检查进程是否仍在运行
-                    if (!process.HasExited)
+                    if (!managedProcess.Process.HasExited)
                     {
                         return true;
                     }
                     else
                     {
                         // 进程意外退出
-                        _runningProcesses.TryRemove(name, out _);
-                        definition.IsRunning = false;
-                        definition.ProcessId = null;
+                        OnProcessExited(name, managedProcess.Process);
                         return false;
                     }
                 }
@@ -110,6 +115,19 @@ namespace Lyxie_desktop.Services
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// 向指定的stdio服务器发送请求并异步读取响应
+        /// </summary>
+        public async Task<string?> SendRequestAndReadResponseAsync(string name, string request, CancellationToken cancellationToken = default)
+        {
+            if (!_runningProcesses.TryGetValue(name, out var managedProcess))
+            {
+                return null; // 服务器未运行
+            }
+
+            return await managedProcess.SendRequestAsync(request, cancellationToken);
         }
 
         /// <summary>
@@ -131,25 +149,27 @@ namespace Lyxie_desktop.Services
                 }
             }
 
-            if (_runningProcesses.TryRemove(name, out var process))
+            if (_runningProcesses.TryRemove(name, out var managedProcess))
             {
                 try
                 {
-                    if (!process.HasExited)
+                    if (!managedProcess.Process.HasExited)
                     {
+                        managedProcess.Unsubscribe();
+                        
                         // 尝试优雅关闭
-                        process.CloseMainWindow();
+                        managedProcess.Process.CloseMainWindow();
                         
                         // 等待2秒让进程自然退出
-                        if (!process.WaitForExit(2000))
+                        if (!managedProcess.Process.WaitForExit(2000))
                         {
                             // 强制终止
-                            process.Kill();
-                            await process.WaitForExitAsync(cancellationToken);
+                            managedProcess.Process.Kill();
+                            await managedProcess.Process.WaitForExitAsync(cancellationToken);
                         }
                     }
 
-                    process.Dispose();
+                    managedProcess.Process.Dispose();
 
                     if (definition != null)
                     {
@@ -193,21 +213,16 @@ namespace Lyxie_desktop.Services
             }
 
             // stdio服务器检查进程状态
-            if (_runningProcesses.TryGetValue(name, out var process))
+            if (_runningProcesses.TryGetValue(name, out var managedProcess))
             {
                 try
                 {
-                    return !process.HasExited;
+                    return !managedProcess.Process.HasExited;
                 }
                 catch
                 {
                     // 进程对象可能已无效
-                    _runningProcesses.TryRemove(name, out _);
-                    if (definition != null)
-                    {
-                        definition.IsRunning = false;
-                        definition.ProcessId = null;
-                    }
+                    OnProcessExited(name, managedProcess.Process);
                     return false;
                 }
             }
@@ -296,7 +311,12 @@ namespace Lyxie_desktop.Services
         {
             try
             {
-                _runningProcesses.TryRemove(name, out _);
+                if (process == null) return;
+
+                if (_runningProcesses.TryRemove(name, out var managedProcess))
+                {
+                    managedProcess.Unsubscribe();
+                }
                 
                 if (_serverDefinitions.TryGetValue(name, out var definition))
                 {
@@ -309,6 +329,28 @@ namespace Lyxie_desktop.Services
             catch
             {
                 // 忽略清理过程中的异常
+            }
+        }
+
+        /// <summary>
+        /// 处理标准输出
+        /// </summary>
+        private void HandleOutput(string serverName, string? data)
+        {
+            if (data != null)
+            {
+                Debug.WriteLine($"[MCP-{serverName}-STDOUT] {data}");
+            }
+        }
+
+        /// <summary>
+        /// 处理标准错误
+        /// </summary>
+        private void HandleError(string serverName, string? data)
+        {
+            if (data != null)
+            {
+                Debug.WriteLine($"[MCP-{serverName}-STDERR] {data}");
             }
         }
 
@@ -329,15 +371,15 @@ namespace Lyxie_desktop.Services
                 stopTask.Wait(TimeSpan.FromSeconds(5)); // 最多等待5秒
 
                 // 清理资源
-                foreach (var process in _runningProcesses.Values)
+                foreach (var managedProcess in _runningProcesses.Values)
                 {
                     try
                     {
-                        if (!process.HasExited)
+                        if (!managedProcess.Process.HasExited)
                         {
-                            process.Kill();
+                            managedProcess.Process.Kill();
                         }
-                        process.Dispose();
+                        managedProcess.Process.Dispose();
                     }
                     catch
                     {
@@ -351,6 +393,130 @@ namespace Lyxie_desktop.Services
             catch
             {
                 // 忽略释放过程中的异常
+            }
+        }
+
+        /// <summary>
+        /// 内部类，用于管理进程及其事件处理器
+        /// </summary>
+        private class ManagedProcess
+        {
+            public Process Process { get; }
+            private readonly string _serverName;
+            private readonly McpServerManager _owner;
+            private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _pendingRequests = new();
+
+            public ManagedProcess(string serverName, Process process, McpServerManager owner)
+            {
+                _serverName = serverName;
+                Process = process;
+                _owner = owner;
+                
+                Subscribe();
+            }
+
+            private void Subscribe()
+            {
+                Process.OutputDataReceived += HandleOutput;
+                Process.ErrorDataReceived += HandleError;
+            }
+
+            public void Unsubscribe()
+            {
+                try
+                {
+                    Process.CancelOutputRead();
+                    Process.CancelErrorRead();
+                    Process.OutputDataReceived -= HandleOutput;
+                    Process.ErrorDataReceived -= HandleError;
+                }
+                catch (InvalidOperationException)
+                {
+                    // 进程可能已经退出，忽略异常
+                }
+            }
+            
+            private void HandleOutput(object sender, DataReceivedEventArgs e)
+            {
+                if (e.Data == null) return;
+
+                try
+                {
+                    using var jsonDoc = JsonDocument.Parse(e.Data);
+                    if (jsonDoc.RootElement.TryGetProperty("id", out var idElement))
+                    {
+                        var id = idElement.ToString();
+                        if (_pendingRequests.TryRemove(id, out var tcs))
+                        {
+                            tcs.TrySetResult(e.Data);
+                        }
+                    }
+                }
+                catch (JsonException)
+                {
+                    // 不是有效的JSON或不包含ID，可能是通知或日志，直接路由到调试输出
+                    _owner.HandleOutput(_serverName, e.Data);
+                }
+            }
+            
+            private void HandleError(object sender, DataReceivedEventArgs e) => _owner.HandleError(_serverName, e.Data);
+
+            public async Task<string?> SendRequestAsync(string request, CancellationToken cancellationToken)
+            {
+                string? requestId = null;
+                try
+                {
+                    using var jsonDoc = JsonDocument.Parse(request);
+                    if (jsonDoc.RootElement.TryGetProperty("id", out var idElement))
+                    {
+                        requestId = idElement.ToString();
+                    }
+                }
+                catch (JsonException)
+                {
+                    // 请求不是有效的JSON，无法处理
+                    return null;
+                }
+
+                if (string.IsNullOrEmpty(requestId))
+                {
+                    // 不支持没有ID的请求
+                    return null;
+                }
+
+                var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!_pendingRequests.TryAdd(requestId, tcs))
+                {
+                    // 重复的请求ID
+                    return null;
+                }
+
+                try
+                {
+                    await Process.StandardInput.WriteLineAsync(request.AsMemory(), cancellationToken);
+                    await Process.StandardInput.FlushAsync(cancellationToken);
+
+                    // 等待响应或超时
+                    using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+                    
+                    var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(Timeout.Infinite, linkedCts.Token));
+
+                    if (completedTask == tcs.Task)
+                    {
+                        return await tcs.Task; // 返回响应
+                    }
+                    else
+                    {
+                        // 超时或取消
+                        tcs.TrySetCanceled();
+                        return null;
+                    }
+                }
+                finally
+                {
+                    _pendingRequests.TryRemove(requestId, out _);
+                }
             }
         }
     }

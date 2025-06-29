@@ -17,8 +17,8 @@ namespace Lyxie_desktop.Services
 
         public McpService()
         {
-            _validationService = new McpValidationService();
             _serverManager = new McpServerManager();
+            _validationService = new McpValidationService(_serverManager);
             _autoValidationService = new McpAutoValidationService(_serverManager);
         }
 
@@ -26,6 +26,11 @@ namespace Lyxie_desktop.Services
         /// 自动验证是否正在运行
         /// </summary>
         public bool IsAutoValidationRunning => _autoValidationService.IsRunning;
+
+        /// <summary>
+        /// 获取自动验证服务实例
+        /// </summary>
+        public IMcpAutoValidationService AutoValidationService => _autoValidationService;
 
         public Task<Dictionary<string, McpServerDefinition>> GetConfigsAsync()
         {

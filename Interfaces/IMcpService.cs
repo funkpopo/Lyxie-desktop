@@ -88,5 +88,7 @@ namespace Lyxie_desktop.Interfaces
     /// </summary>
     /// <returns>正在运行的服务器名称列表</returns>
     IEnumerable<string> GetRunningServers();
+
+    IMcpAutoValidationService AutoValidationService { get; }
 }
 } 

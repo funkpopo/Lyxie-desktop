@@ -452,10 +452,9 @@ namespace Lyxie_desktop.Views
             // 初始化API服务
             _llmApiService = new LlmApiService();
             _ttsApiService = new TtsApiService();
-            _mcpService = new McpService();
-            // 获取自动验证服务实例 - 这里需要通过依赖注入或服务定位器
-            // 暂时创建新实例，实际项目中应使用依赖注入
-            _mcpAutoValidationService = new McpAutoValidationService(new McpServerManager());
+            _mcpService = App.McpService;
+            // 获取自动验证服务实例
+            _mcpAutoValidationService = _mcpService.AutoValidationService;
 
             // 设置文件路径
             var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -2126,9 +2125,9 @@ namespace Lyxie_desktop.Views
         {
             base.OnDetachedFromVisualTree(e);
             
-            // 清理MCP服务资源
-            _mcpService?.Dispose();
-            _mcpAutoValidationService?.Dispose();
+            // 全局服务不由该视图释放
+            // _mcpService?.Dispose();
+            // _mcpAutoValidationService?.Dispose();
             
             // 清理ViewModel资源
             foreach (var viewModel in McpServices)

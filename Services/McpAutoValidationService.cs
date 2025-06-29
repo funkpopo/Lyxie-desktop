@@ -38,7 +38,7 @@ namespace Lyxie_desktop.Services
         public McpAutoValidationService(IMcpServerManager serverManager)
         {
             _serverManager = serverManager ?? throw new ArgumentNullException(nameof(serverManager));
-            _validationService = new McpValidationService();
+            _validationService = new McpValidationService(serverManager);
             _servers = new ConcurrentDictionary<string, McpServerDefinition>();
             _lastResults = new ConcurrentDictionary<string, McpValidationResult>();
             _validationTimers = new ConcurrentDictionary<string, Timer>();
@@ -259,25 +259,6 @@ namespace Lyxie_desktop.Services
 
             try
             {
-                // 如果是本地stdio服务器且尚未运行，先启动它
-                if (definition.IsStdioServer && !definition.IsRunning)
-                {
-                    var started = await _serverManager.StartServerAsync(name, definition, cancellationToken);
-                    if (!started)
-                    {
-                        result = new McpValidationResult
-                        {
-                            IsAvailable = false,
-                            Status = McpValidationStatus.Unavailable,
-                            ErrorMessage = "无法启动本地服务器",
-                            ValidatedAt = DateTime.UtcNow
-                        };
-                        
-                        _lastResults.AddOrUpdate(name, result, (k, v) => result);
-                        return result;
-                    }
-                }
-
                 // 执行MCP协议验证
                 result = await _validationService.ValidateServerAsync(name, definition, cancellationToken);
                 

@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Lyxie_desktop.Interfaces;
 using Lyxie_desktop.Models;
 using Newtonsoft.Json;
 
@@ -15,13 +16,15 @@ namespace Lyxie_desktop.Services
     /// <summary>
     /// MCP验证服务，负责验证MCP服务器的可用性
     /// </summary>
-    public class McpValidationService
+    public class McpValidationService : IDisposable
     {
         private readonly HttpClient _httpClient;
+        private readonly IMcpServerManager? _serverManager;
         private const int DefaultTimeoutSeconds = 30;
 
-        public McpValidationService()
+        public McpValidationService(IMcpServerManager? serverManager = null)
         {
+            _serverManager = serverManager;
             _httpClient = new HttpClient
             {
                 Timeout = TimeSpan.FromSeconds(DefaultTimeoutSeconds)
@@ -184,44 +187,35 @@ namespace Lyxie_desktop.Services
         /// </summary>
         private async Task<McpValidationResult> ValidateStdioServerAsync(string name, McpServerDefinition definition, CancellationToken cancellationToken)
         {
+            if (_serverManager is null)
+            {
+                return new McpValidationResult
+                {
+                    IsAvailable = false,
+                    Status = McpValidationStatus.ConfigurationError,
+                    ErrorMessage = "McpServerManager未初始化，无法验证stdio服务器"
+                };
+            }
+
+            // 1. 检查服务器是否正在运行
+            if (!_serverManager.IsServerRunning(name))
+            {
+                return new McpValidationResult
+                {
+                    IsAvailable = false,
+                    Status = McpValidationStatus.Unavailable,
+                    ErrorMessage = "服务器进程未运行"
+                };
+            }
+            
             try
             {
-                var processStartInfo = new ProcessStartInfo
-                {
-                    FileName = definition.Command,
-                    UseShellExecute = false,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-
-                // 添加参数
-                if (definition.Args != null)
-                {
-                    foreach (var arg in definition.Args)
-                    {
-                        processStartInfo.ArgumentList.Add(arg);
-                    }
-                }
-
-                using var process = new Process { StartInfo = processStartInfo };
-                
-                if (!process.Start())
-                {
-                    return new McpValidationResult
-                    {
-                        IsAvailable = false,
-                        Status = McpValidationStatus.Unavailable,
-                        ErrorMessage = "无法启动进程"
-                    };
-                }
-
-                // 发送MCP初始化请求
+                // 2. 构建MCP初始化请求
+                var requestId = Guid.NewGuid().ToString();
                 var initRequest = new
                 {
                     jsonrpc = "2.0",
-                    id = 1,
+                    id = requestId,
                     method = "initialize",
                     @params = new
                     {
@@ -238,30 +232,16 @@ namespace Lyxie_desktop.Services
                         }
                     }
                 };
+                var jsonRequest = JsonConvert.SerializeObject(initRequest);
 
-                var jsonRequest = JsonConvert.SerializeObject(initRequest) + "\n";
-                await process.StandardInput.WriteAsync(jsonRequest.AsMemory(), cancellationToken);
-                await process.StandardInput.FlushAsync();
+                // 3. 发送请求并等待响应
+                var responseLine = await _serverManager.SendRequestAndReadResponseAsync(name, jsonRequest, cancellationToken);
 
-                // 读取响应（设置超时）
-                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-                var responseLine = await process.StandardOutput.ReadLineAsync();
-                
                 if (!string.IsNullOrEmpty(responseLine))
                 {
                     var mcpResponse = JsonConvert.DeserializeObject<dynamic>(responseLine);
-                    
-                    if (mcpResponse?.result != null)
+                    if (mcpResponse?.result != null && mcpResponse?.id == requestId)
                     {
-                        // 优雅地关闭进程
-                        if (!process.HasExited)
-                        {
-                            process.Kill();
-                            await process.WaitForExitAsync(cancellationToken);
-                        }
-
                         return new McpValidationResult
                         {
                             IsAvailable = true,
@@ -271,29 +251,20 @@ namespace Lyxie_desktop.Services
                     }
                 }
 
-                // 读取错误输出
-                var errorOutput = await process.StandardError.ReadToEndAsync();
-                
-                if (!process.HasExited)
-                {
-                    process.Kill();
-                    await process.WaitForExitAsync(cancellationToken);
-                }
-
                 return new McpValidationResult
                 {
                     IsAvailable = false,
                     Status = McpValidationStatus.Unavailable,
-                    ErrorMessage = string.IsNullOrEmpty(errorOutput) ? "进程无响应或响应格式不正确" : $"错误: {errorOutput}"
+                    ErrorMessage = "进程无响应或响应格式不正确"
                 };
             }
-            catch (FileNotFoundException)
+            catch (OperationCanceledException)
             {
                 return new McpValidationResult
                 {
                     IsAvailable = false,
-                    Status = McpValidationStatus.ConfigurationError,
-                    ErrorMessage = $"找不到命令: {definition.Command}"
+                    Status = McpValidationStatus.Timeout,
+                    ErrorMessage = "验证请求超时"
                 };
             }
             catch (Exception ex)
@@ -302,7 +273,7 @@ namespace Lyxie_desktop.Services
                 {
                     IsAvailable = false,
                     Status = McpValidationStatus.Unavailable,
-                    ErrorMessage = $"进程错误: {ex.Message}"
+                    ErrorMessage = $"验证异常: {ex.Message}"
                 };
             }
         }
