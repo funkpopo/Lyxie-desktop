@@ -29,10 +29,10 @@ public partial class App : Application
     public static IMcpService McpService { get; private set; } = new McpService();
     
     // 全局MCP服务器管理实例
-    public static IMcpServerManager McpServerManager { get; private set; }
+    public static IMcpServerManager? McpServerManager { get; private set; }
     
     // 全局MCP自动验证服务实例
-    public static IMcpAutoValidationService McpAutoValidationService { get; private set; }
+    public static IMcpAutoValidationService? McpAutoValidationService { get; private set; }
     
     // 全局TTS服务实例
     public static TtsApiService TtsApiService { get; private set; } = new TtsApiService();
@@ -127,7 +127,11 @@ public partial class App : Application
         {
             await McpService.StopAutoValidationAsync();
             await McpService.StopAllServersAsync();
-            System.Diagnostics.Debug.WriteLine("MCP服务已停止");
+            
+            // 释放服务资源
+            (McpService as IDisposable)?.Dispose();
+            
+            System.Diagnostics.Debug.WriteLine("MCP服务已停止并释放资源");
         }
         catch (Exception ex)
         {
@@ -253,12 +257,10 @@ public partial class App : Application
             McpServerManager = McpService.ServerManager;
             McpAutoValidationService = McpService.AutoValidationService;
 
-            // 启动自动验证服务
-            _ = McpAutoValidationService.StartAsync();
-
-            // 更新自动验证配置
-            Task.Run(async () =>
+            // 启动自动验证服务并更新配置
+            _ = Task.Run(async () =>
             {
+                await McpAutoValidationService.StartAsync();
                 var configs = await McpService.GetConfigsAsync();
                 await McpAutoValidationService.UpdateConfigurationAsync(configs);
             });

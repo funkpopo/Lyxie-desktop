@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace Lyxie_desktop.Services
 {
-    public class McpService : IMcpService
+    public class McpService : IMcpService, IDisposable
     {
         private readonly McpValidationService _validationService;
         private readonly IMcpServerManager _serverManager;
@@ -247,9 +247,22 @@ namespace Lyxie_desktop.Services
 
         public void Dispose()
         {
-            _validationService?.Dispose();
-            _serverManager?.Dispose();
-            _autoValidationService?.Dispose();
+            // The dispose methods on the services might not exist.
+            // Let's cast to IDisposable to be safe.
+            if (_validationService is IDisposable validationDisposable)
+            {
+                validationDisposable.Dispose();
+            }
+
+            if (_serverManager is IDisposable serverManagerDisposable)
+            {
+                serverManagerDisposable.Dispose();
+            }
+
+            if (_autoValidationService is IDisposable autoValidationDisposable)
+            {
+                autoValidationDisposable.Dispose();
+            }
         }
     }
 }

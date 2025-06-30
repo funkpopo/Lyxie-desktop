@@ -8,21 +8,27 @@ using System.Threading;
 using System.Threading.Tasks;
 using Lyxie_desktop.Interfaces;
 using Lyxie_desktop.Models;
+using Lyxie_desktop.Helpers;
 
 namespace Lyxie_desktop.Services
 {
     /// <summary>
     /// MCP服务器管理器实现
     /// </summary>
-    public class McpServerManager : IMcpServerManager
+    public class McpServerManager : IMcpServerManager, IDisposable
     {
         private readonly ConcurrentDictionary<string, McpServerDefinition> _serverDefinitions;
         private readonly object _lockObject = new object();
         private bool _disposed = false;
+        private readonly JobObjectManager? _jobObjectManager;
 
         public McpServerManager()
         {
             _serverDefinitions = new ConcurrentDictionary<string, McpServerDefinition>();
+            if (OperatingSystem.IsWindows())
+            {
+                _jobObjectManager = new JobObjectManager();
+            }
         }
 
         /// <summary>
@@ -52,10 +58,10 @@ namespace Lyxie_desktop.Services
 
             try
             {
-                // 使用PowerShell或CMD来启动MCP服务
-                bool useCmd = true; // 设置为true使用CMD, false使用PowerShell
-                string shellExecutable = useCmd ? "cmd.exe" : "powershell.exe";
-                string shellArgs = useCmd ? "/c " : "-NoProfile -ExecutionPolicy Bypass -Command ";
+                // 在Windows上，我们使用cmd.exe来承载命令，以便可以将其添加到Job Object中
+                // 这样可以确保即使是像npx这样的批处理文件也能正确执行
+                string shellExecutable = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh"; // 为非Windows系统提供一个备用
+                string shellArgsPrefix = OperatingSystem.IsWindows() ? "/c " : "-c ";
                 
                 // 构建完整命令
                 string fullCommand = definition.Command!;
@@ -72,12 +78,12 @@ namespace Lyxie_desktop.Services
                 var processStartInfo = new ProcessStartInfo
                 {
                     FileName = shellExecutable,
+                    Arguments = shellArgsPrefix + fullCommand,
                     UseShellExecute = false,
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     CreateNoWindow = true,
-                    Arguments = shellArgs + fullCommand
                 };
 
                 var process = new Process { StartInfo = processStartInfo };
@@ -91,6 +97,9 @@ namespace Lyxie_desktop.Services
                 
                 if (process.Start())
                 {
+                    // 在Windows上，将进程添加到Job Object
+                    _jobObjectManager?.AddProcess(process);
+
                     process.BeginOutputReadLine();
                     process.BeginErrorReadLine();
                     
@@ -439,6 +448,8 @@ namespace Lyxie_desktop.Services
                     StopServerAsync(name).Wait(TimeSpan.FromSeconds(2));
                 }
                 _serverDefinitions.Clear();
+                
+                _jobObjectManager?.Dispose();
             }
             catch
             {
