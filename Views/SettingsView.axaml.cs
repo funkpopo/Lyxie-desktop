@@ -205,63 +205,56 @@ namespace Lyxie_desktop.Views
         /// </summary>
         private async Task ToggleServerAsync(bool enable)
         {
+            IsLoading = true;
+            OperationStatus = enable ? "启动中..." : "停止中...";
+
             try
             {
-                IsLoading = true;
-                OperationStatus = enable ? "启动中..." : "停止中...";
-                
-                bool success;
                 if (enable)
                 {
-                    success = await _mcpService.StartServerAsync(_name).ConfigureAwait(false);
+                    // 1. 立即更新状态并保存，反映用户意图
+                    Definition.IsEnabled = true;
+                    OnPropertyChanged(nameof(IsEnabled));
+                    OnPropertyChanged(nameof(StatusText));
+                    await _saveAction().ConfigureAwait(false);
+
+                    // 2. 在后台尝试启动服务
+                    bool success = await _mcpService.StartServerAsync(_name).ConfigureAwait(false);
                     if (success)
                     {
-                        Definition.IsEnabled = true;
-                        
-                        // 同步实际运行状态
                         var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
                         Definition.IsRunning = isActuallyRunning;
-                        
                         OperationStatus = "验证中...";
-                        
-                        // 立即验证服务器状态
                         await _mcpService.ValidateServerAsync(_name, Definition).ConfigureAwait(false);
                     }
                     else
                     {
-                        // 启动失败时，检查是否是因为进程已存在
-                        var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
-                        if (isActuallyRunning)
-                        {
-                            Definition.IsEnabled = true;
-                            Definition.IsRunning = true;
-                            OperationStatus = "验证中...";
-                            await _mcpService.ValidateServerAsync(_name, Definition).ConfigureAwait(false);
-                            success = true;
-                        }
-                        else
-                        {
-                            OperationStatus = "启动失败";
-                            await Task.Delay(2000).ConfigureAwait(false);
-                        }
+                        Definition.IsRunning = false;
+                        Definition.ErrorMessage = Definition.ErrorMessage ?? "启动失败，请检查配置或日志。";
+                        OperationStatus = "启动失败";
+                        await Task.Delay(2000).ConfigureAwait(false);
                     }
                 }
                 else
                 {
-                    success = await _mcpService.StopServerAsync(_name).ConfigureAwait(false);
+                    // 停止服务
+                    bool success = await _mcpService.StopServerAsync(_name).ConfigureAwait(false);
                     if (success)
                     {
                         Definition.IsEnabled = false;
                         Definition.IsAvailable = false;
                         Definition.ValidationStatus = McpValidationStatus.Unknown;
                         Definition.ErrorMessage = null;
-                        Definition.IsRunning = false; // 立即更新运行状态，防止停止中状态滞留
+                        Definition.IsRunning = false;
                     }
                     else
                     {
                         OperationStatus = "停止失败";
                         await Task.Delay(2000).ConfigureAwait(false);
                     }
+                    
+                    // 确保保存停止后的状态
+                    await _saveAction().ConfigureAwait(false);
                 }
                 
                 // 触发属性变更通知
@@ -273,9 +266,6 @@ namespace Lyxie_desktop.Views
                     OnPropertyChanged(nameof(ValidationStatusText));
                     OnPropertyChanged(nameof(ErrorMessage));
                 });
-                
-                // 保存配置
-                await _saveAction().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -295,13 +285,7 @@ namespace Lyxie_desktop.Views
                     IsLoading = false;
                     OperationStatus = "";
                     
-                    // 确保状态完全更新，防止UI显示"停止中"状态
-                    if (!Definition.IsEnabled)
-                    {
-                        Definition.IsRunning = false; // 确保运行状态也被更新
-                    }
-                    
-                    // 强制刷新所有相关UI状态
+                    // 确保UI最终状态一致
                     OnPropertyChanged(nameof(IsEnabled));
                     OnPropertyChanged(nameof(StatusText));
                     OnPropertyChanged(nameof(ValidationStatusText));
