@@ -213,7 +213,7 @@ namespace Lyxie_desktop.Services
             definition.ProcessId = null;
             
             // 如果进程已经不在运行，也算作成功
-            if (!IsExternalProcessRunning(definition.Command, definition.Args))
+            if (definition.Command != null && !IsExternalProcessRunning(definition.Command, definition.Args))
             {
                 stopped = true;
             }
