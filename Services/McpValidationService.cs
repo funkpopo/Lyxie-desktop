@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -22,6 +23,12 @@ namespace Lyxie_desktop.Services
         private readonly HttpClient _httpClient;
         private readonly IMcpServerManager? _serverManager;
         private const int DefaultTimeoutSeconds = 30;
+        
+        // 缓存验证结果和验证时间
+        private readonly ConcurrentDictionary<string, (McpValidationResult Result, DateTime Timestamp)> _validationCache = new();
+        // 验证缓存有效期（成功后10分钟内不重新验证，失败后30秒内不重新验证）
+        private static readonly TimeSpan _successCacheDuration = TimeSpan.FromMinutes(10);
+        private static readonly TimeSpan _failureCacheDuration = TimeSpan.FromSeconds(30);
 
         public McpValidationService(IMcpServerManager? serverManager = null)
         {
@@ -38,8 +45,10 @@ namespace Lyxie_desktop.Services
         /// <param name="name">服务器名称</param>
         /// <param name="definition">服务器定义</param>
         /// <param name="cancellationToken">取消令牌</param>
+        /// <param name="forceCheck">强制重新验证，忽略缓存</param>
         /// <returns>验证结果</returns>
-        public async Task<McpValidationResult> ValidateServerAsync(string name, McpServerDefinition definition, CancellationToken cancellationToken = default)
+        public async Task<McpValidationResult> ValidateServerAsync(string name, McpServerDefinition definition, 
+            CancellationToken cancellationToken = default, bool forceCheck = false)
         {
             if (definition == null)
             {
@@ -60,45 +69,81 @@ namespace Lyxie_desktop.Services
                     ErrorMessage = "服务器已禁用"
                 };
             }
+            
+            // 检查缓存，避免频繁验证
+            if (!forceCheck && _validationCache.TryGetValue(name, out var cached))
+            {
+                var now = DateTime.UtcNow;
+                var cacheDuration = cached.Result.IsAvailable ? _successCacheDuration : _failureCacheDuration;
+                
+                // 如果缓存仍然有效，直接返回缓存的结果
+                if ((now - cached.Timestamp) < cacheDuration)
+                {
+                    System.Diagnostics.Debug.WriteLine($"使用缓存的验证结果，服务器 {name}, 状态: {cached.Result.IsAvailable}, 距上次验证: {(now - cached.Timestamp).TotalSeconds:F1}秒");
+                    return cached.Result;
+                }
+                
+                // 对于已验证成功的服务器，如果进程仍在运行，则延长缓存有效期（减少验证频率）
+                if (cached.Result.IsAvailable && definition.IsStdioServer && _serverManager != null && _serverManager.IsServerRunning(name))
+                {
+                    System.Diagnostics.Debug.WriteLine($"服务器 {name} 进程仍在运行，延长缓存有效期");
+                    _validationCache[name] = (cached.Result, now); // 更新时间戳
+                    return cached.Result;
+                }
+            }
 
             try
             {
+                McpValidationResult result;
+                
                 // 根据协议类型选择验证方法
                 if (!string.IsNullOrEmpty(definition.Url))
                 {
-                    return await ValidateHttpServerAsync(name, definition, cancellationToken);
+                    result = await ValidateHttpServerAsync(name, definition, cancellationToken);
                 }
                 else if (!string.IsNullOrEmpty(definition.Command))
                 {
-                    return await ValidateStdioServerAsync(name, definition, cancellationToken);
+                    result = await ValidateStdioServerAsync(name, definition, cancellationToken);
                 }
                 else
                 {
-                    return new McpValidationResult
+                    result = new McpValidationResult
                     {
                         IsAvailable = false,
                         Status = McpValidationStatus.ConfigurationError,
                         ErrorMessage = "缺少必要的配置：URL或Command"
                     };
                 }
+                
+                // 更新缓存
+                _validationCache[name] = (result, DateTime.UtcNow);
+                return result;
             }
             catch (OperationCanceledException)
             {
-                return new McpValidationResult
+                var result = new McpValidationResult
                 {
                     IsAvailable = false,
                     Status = McpValidationStatus.Timeout,
                     ErrorMessage = "验证超时"
                 };
+                
+                // 更新缓存
+                _validationCache[name] = (result, DateTime.UtcNow);
+                return result;
             }
             catch (Exception ex)
             {
-                return new McpValidationResult
+                var result = new McpValidationResult
                 {
                     IsAvailable = false,
                     Status = McpValidationStatus.Unavailable,
                     ErrorMessage = $"验证失败: {ex.Message}"
                 };
+                
+                // 更新缓存
+                _validationCache[name] = (result, DateTime.UtcNow);
+                return result;
             }
         }
 
@@ -329,8 +374,12 @@ namespace Lyxie_desktop.Services
         /// </summary>
         /// <param name="servers">服务器字典</param>
         /// <param name="cancellationToken">取消令牌</param>
+        /// <param name="forceCheck">强制重新验证，忽略缓存</param>
         /// <returns>验证结果字典</returns>
-        public async Task<Dictionary<string, McpValidationResult>> ValidateServersAsync(Dictionary<string, McpServerDefinition> servers, CancellationToken cancellationToken = default)
+        public async Task<Dictionary<string, McpValidationResult>> ValidateServersAsync(
+            Dictionary<string, McpServerDefinition> servers, 
+            CancellationToken cancellationToken = default, 
+            bool forceCheck = false)
         {
             var results = new Dictionary<string, McpValidationResult>();
             var tasks = new List<Task>();
@@ -339,7 +388,7 @@ namespace Lyxie_desktop.Services
             {
                 var task = Task.Run(async () =>
                 {
-                    var result = await ValidateServerAsync(server.Key, server.Value, cancellationToken);
+                    var result = await ValidateServerAsync(server.Key, server.Value, cancellationToken, forceCheck);
                     lock (results)
                     {
                         results[server.Key] = result;

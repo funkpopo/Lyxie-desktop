@@ -18,7 +18,6 @@ namespace Lyxie_desktop.Services
         private readonly McpValidationService _validationService;
         private readonly ConcurrentDictionary<string, McpServerDefinition> _servers;
         private readonly ConcurrentDictionary<string, McpValidationResult> _lastResults;
-        private readonly ConcurrentDictionary<string, Timer> _validationTimers;
         private readonly object _lockObject = new object();
         
         private CancellationTokenSource? _cancellationTokenSource;
@@ -41,7 +40,6 @@ namespace Lyxie_desktop.Services
             _validationService = new McpValidationService(serverManager);
             _servers = new ConcurrentDictionary<string, McpServerDefinition>();
             _lastResults = new ConcurrentDictionary<string, McpValidationResult>();
-            _validationTimers = new ConcurrentDictionary<string, Timer>();
         }
 
         /// <summary>
@@ -60,23 +58,11 @@ namespace Lyxie_desktop.Services
                 _cancellationTokenSource = new CancellationTokenSource();
                 _isRunning = true;
             }
-
-            try
-            {
-                // 启动各个服务器的定时验证
-                foreach (var server in _servers)
-                {
-                    if (server.Value.IsEnabled && server.Value.AutoValidationEnabled)
-                    {
-                        await StartServerValidationTimer(server.Key, server.Value);
-                    }
-                }
-            }
-            catch (Exception)
-            {
-                await StopAsync(cancellationToken);
-                throw;
-            }
+            
+            // "一次性验证"模型下，StartAsync只标记服务为运行状态，不主动发起验证。
+            // 验证由TriggerValidationAsync按需触发。
+            System.Diagnostics.Debug.WriteLine("McpAutoValidationService started.");
+            await Task.CompletedTask;
         }
 
         /// <summary>
@@ -96,16 +82,10 @@ namespace Lyxie_desktop.Services
                 _cancellationTokenSource?.Cancel();
             }
 
-            // 停止所有定时器
-            foreach (var timer in _validationTimers.Values)
-            {
-                timer.Dispose();
-            }
-            _validationTimers.Clear();
-
             _cancellationTokenSource?.Dispose();
             _cancellationTokenSource = null;
 
+            System.Diagnostics.Debug.WriteLine("McpAutoValidationService stopped.");
             await Task.CompletedTask;
         }
 
@@ -132,6 +112,10 @@ namespace Lyxie_desktop.Services
             {
                 _servers.TryAdd(server.Key, server.Value);
             }
+            
+            // 清除旧的验证结果，因为配置已改变
+            _lastResults.Clear();
+            System.Diagnostics.Debug.WriteLine("MCP validation configuration updated and results cleared.");
 
             // 如果正在运行，重新启动以应用新配置
             if (_isRunning)
@@ -141,31 +125,58 @@ namespace Lyxie_desktop.Services
         }
 
         /// <summary>
-        /// 手动触发一次完整验证
+        /// 手动触发一次完整验证。
+        /// 在"一次性验证"模型中，此方法是核心。
+        /// 它只验证那些尚未成功验证过的服务器。
         /// </summary>
-        public async Task<Dictionary<string, McpValidationResult>> TriggerValidationAsync(CancellationToken cancellationToken = default)
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <param name="forceCheck">是否强制验证。如果为true，将重新验证失败的服务器，但仍会跳过已成功的。</param>
+        /// <returns>验证结果字典</returns>
+        public async Task<Dictionary<string, McpValidationResult>> TriggerValidationAsync(
+            CancellationToken cancellationToken = default,
+            bool forceCheck = false)
         {
             var results = new Dictionary<string, McpValidationResult>();
             var tasks = new List<Task>();
 
             foreach (var server in _servers)
             {
-                if (server.Value.IsEnabled)
+                if (!server.Value.IsEnabled) continue;
+
+                var serverName = server.Key;
+                var serverDef = server.Value;
+
+                // 核心逻辑：如果服务器已经验证成功，则永远跳过，除非状态被重置。
+                if (_lastResults.TryGetValue(serverName, out var lastResult) && lastResult.IsAvailable && !forceCheck)
                 {
-                    var task = Task.Run(async () =>
-                    {
-                        var result = await ValidateServerAsync(server.Key, server.Value, cancellationToken);
-                        lock (results)
-                        {
-                            results[server.Key] = result;
-                        }
-                    }, cancellationToken);
-                    
-                    tasks.Add(task);
+                    System.Diagnostics.Debug.WriteLine($"使用缓存的验证结果，服务器 {serverName}, 状态: {lastResult.IsAvailable}, 距上次验证: {(DateTime.UtcNow - lastResult.ValidatedAt).TotalSeconds:F1}秒");
+                    results[serverName] = lastResult;
+                    continue;
                 }
+                
+                // 如果是强制检查，或者之前没有成功过，则需要验证
+                var task = Task.Run(async () =>
+                {
+                    var result = await ValidateServerAsync(serverName, serverDef, cancellationToken);
+                    lock (results)
+                    {
+                        results[serverName] = result;
+                    }
+                }, cancellationToken);
+                
+                tasks.Add(task);
             }
 
-            await Task.WhenAll(tasks);
+            if (tasks.Any())
+            {
+                await Task.WhenAll(tasks);
+                System.Diagnostics.Debug.WriteLine($"已触发验证，验证了 {tasks.Count} 个服务器。");
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("无需验证新的服务器，所有已启用服务器均已成功验证。");
+            }
+            
             return results;
         }
 
@@ -192,7 +203,13 @@ namespace Lyxie_desktop.Services
 
             if (!definition.IsEnabled)
             {
-                return null;
+                return new McpValidationResult
+                {
+                    IsAvailable = false,
+                    Status = McpValidationStatus.Unavailable,
+                    ErrorMessage = "服务器已禁用",
+                    ValidatedAt = DateTime.UtcNow
+                };
             }
 
             var result = await ValidateServerAsync(serverName, definition, cancellationToken);
@@ -202,51 +219,18 @@ namespace Lyxie_desktop.Services
             
             return result;
         }
-
+        
         /// <summary>
-        /// 启动单个服务器的验证定时器
+        /// 重置指定服务器的验证状态，使其可以在下次触发时被重新验证。
         /// </summary>
-        private Task StartServerValidationTimer(string name, McpServerDefinition definition)
+        /// <param name="serverName">要重置的服务器名</param>
+        public void ResetValidationState(string serverName)
         {
-            if (_validationTimers.ContainsKey(name))
+            if (string.IsNullOrEmpty(serverName)) return;
+
+            if (_lastResults.TryRemove(serverName, out _))
             {
-                // 停止现有定时器
-                if (_validationTimers.TryRemove(name, out var existingTimer))
-                {
-                    existingTimer.Dispose();
-                }
-            }
-
-            // 计算定时器间隔
-            var interval = TimeSpan.FromSeconds(Math.Max(definition.ValidationInterval, 10)); // 最小10秒间隔
-
-            // 创建新的定时器
-            var timer = new Timer(async _ => await ValidateServerCallback(name, definition), 
-                                null, TimeSpan.Zero, interval);
-            
-            _validationTimers.TryAdd(name, timer);
-            
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// 验证服务器回调方法
-        /// </summary>
-        private async Task ValidateServerCallback(string name, McpServerDefinition definition)
-        {
-            if (_disposed || _cancellationTokenSource?.Token.IsCancellationRequested == true)
-                return;
-
-            try
-            {
-                var result = await ValidateServerAsync(name, definition, _cancellationTokenSource?.Token ?? CancellationToken.None);
-                
-                // 触发验证完成事件
-                ValidationCompleted?.Invoke(this, (name, result));
-            }
-            catch (Exception)
-            {
-                // 忽略验证过程中的异常，避免影响其他服务器的验证
+                System.Diagnostics.Debug.WriteLine($"服务器 {serverName} 的验证状态已重置。");
             }
         }
 
@@ -259,7 +243,8 @@ namespace Lyxie_desktop.Services
 
             try
             {
-                // 执行MCP协议验证
+                // 执行实际验证
+                System.Diagnostics.Debug.WriteLine($"开始验证服务器 {name}...");
                 result = await _validationService.ValidateServerAsync(name, definition, cancellationToken);
                 
                 // 更新服务器定义状态
@@ -273,13 +258,17 @@ namespace Lyxie_desktop.Services
                 {
                     // 本地服务器仍在运行，但MCP验证失败，可能是初始化中或暂时不可用
                     // 不需要重启，下次验证可能会成功
-                    // 对于外部启动的进程，只要进程存在就认为可用
                     result.IsAvailable = true;
                     result.Status = McpValidationStatus.Available;
                     result.ErrorMessage = "进程存在（外部启动或初始化中）";
+                    System.Diagnostics.Debug.WriteLine($"服务器 {name} 虽然验证失败但进程存在，标记为可用");
                 }
 
+                // 更新结果和时间戳
                 _lastResults.AddOrUpdate(name, result, (k, v) => result);
+                
+                // 打印验证结果
+                System.Diagnostics.Debug.WriteLine($"验证服务器 {name}: {(result.IsAvailable ? "成功" : "失败")} - {result.ErrorMessage ?? "无错误"}");
             }
             catch (OperationCanceledException)
             {
@@ -292,6 +281,7 @@ namespace Lyxie_desktop.Services
                 };
                 
                 _lastResults.AddOrUpdate(name, result, (k, v) => result);
+                System.Diagnostics.Debug.WriteLine($"验证服务器 {name} 被取消");
             }
             catch (Exception ex)
             {
@@ -304,6 +294,7 @@ namespace Lyxie_desktop.Services
                 };
                 
                 _lastResults.AddOrUpdate(name, result, (k, v) => result);
+                System.Diagnostics.Debug.WriteLine($"验证服务器 {name} 发生异常: {ex.Message}");
             }
 
             return result;

@@ -52,8 +52,9 @@ namespace Lyxie_desktop.Interfaces
         /// 手动触发一次完整验证
         /// </summary>
         /// <param name="cancellationToken">取消令牌</param>
+        /// <param name="forceCheck">是否强制验证，忽略缓存</param>
         /// <returns>验证结果字典</returns>
-        Task<Dictionary<string, Models.McpValidationResult>> TriggerValidationAsync(CancellationToken cancellationToken = default);
+        Task<Dictionary<string, Models.McpValidationResult>> TriggerValidationAsync(CancellationToken cancellationToken = default, bool forceCheck = false);
 
         /// <summary>
         /// 获取最近的验证结果
@@ -68,5 +69,11 @@ namespace Lyxie_desktop.Interfaces
         /// <param name="cancellationToken">取消令牌</param>
         /// <returns>验证结果</returns>
         Task<Models.McpValidationResult?> ValidateServerImmediatelyAsync(string serverName, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 重置指定服务器的验证状态，使其可以在下次触发时被重新验证。
+        /// </summary>
+        /// <param name="serverName">要重置的服务器名</param>
+        void ResetValidationState(string serverName);
     }
 }

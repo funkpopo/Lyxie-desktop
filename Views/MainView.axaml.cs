@@ -142,7 +142,7 @@ public partial class MainView : UserControl
     }
     
     // 初始化工具面板开关状态
-    private void InitializeToolToggles()
+    private async void InitializeToolToggles()
     {
         var ttsToggle = this.FindControl<ToggleSwitch>("TTSToggle");
         var dev1Toggle = this.FindControl<ToggleSwitch>("Dev1Toggle");
@@ -155,7 +155,54 @@ public partial class MainView : UserControl
             dev1Toggle.IsChecked = App.Settings.EnableDev1;
             
         if (dev2Toggle != null)
+        {
+            // 初始化MCP开关状态，不触发事件
             dev2Toggle.IsChecked = App.Settings.EnableDev2;
+            
+            // 检查MCP服务状态并更新UI
+            try
+            {
+                // 获取MCP filesystem服务状态
+                bool isRunning = App.McpService.GetRunningServers().Contains("filesystem");
+                var configs = await App.McpService.GetConfigsAsync();
+                
+                if (configs.TryGetValue("filesystem", out var config))
+                {
+                    // 设置UI显示状态
+                    if (config.IsEnabled && isRunning)
+                    {
+                        if (config.IsAvailable)
+                        {
+                            dev2Toggle.Content = "已启用 - 可用";
+                        }
+                        else
+                        {
+                            dev2Toggle.Content = "已启用 - 未验证";
+                        }
+                    }
+                    else if (config.IsEnabled && !isRunning)
+                    {
+                        dev2Toggle.Content = "已启用 - 未运行";
+                    }
+                    else
+                    {
+                        dev2Toggle.Content = "已禁用";
+                        // 确保自动验证也被关闭
+                        config.AutoValidationEnabled = false;
+                        await App.McpService.SaveConfigsAsync(configs);
+                    }
+                }
+                else
+                {
+                    dev2Toggle.Content = "未配置";
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"初始化MCP状态时出错: {ex.Message}");
+                dev2Toggle.Content = "状态错误";
+            }
+        }
     }
     
     private async void OnMainButtonClick(object? sender, RoutedEventArgs e)
@@ -414,15 +461,92 @@ public partial class MainView : UserControl
         }
     }
 
-    private void OnDev2Toggled(object? sender, RoutedEventArgs e)
+    private async void OnDev2Toggled(object? sender, RoutedEventArgs e)
     {
         if (sender is ToggleSwitch toggle)
         {
-            App.Settings.EnableDev2 = toggle.IsChecked ?? false;
+            bool isEnabled = toggle.IsChecked ?? false;
+            App.Settings.EnableDev2 = isEnabled;
             App.SaveSettings();
             
-            // TODO: 实现开发功能2切换
-            System.Diagnostics.Debug.WriteLine($"开发功能2开关状态: {toggle.IsChecked}");
+            var dev2Toggle = toggle; // 在异步方法中使用本地变量
+
+            // MCP文件系统工具切换
+            try
+            {
+                if (isEnabled)
+                {
+                    System.Diagnostics.Debug.WriteLine("请求启用MCP文件系统服务...");
+                    
+                    // 获取服务器配置
+                    var configs = await App.McpService.GetConfigsAsync();
+                    if (configs.TryGetValue("filesystem", out var config))
+                    {
+                        // 1. 更新配置为启用
+                        config.IsEnabled = true;
+                        await App.McpService.SaveConfigsAsync(configs);
+                        
+                        // 2. 启动底层服务器
+                        bool started = await App.McpService.StartServerAsync("filesystem");
+                        if (started)
+                        {
+                            System.Diagnostics.Debug.WriteLine("MCP文件系统服务已启动，现触发一次性验证...");
+                            dev2Toggle.Content = "正在验证...";
+                            
+                            // 3. 触发"一次性"验证
+                            var validationResults = await App.McpAutoValidationService.TriggerValidationAsync(forceCheck: false);
+                            
+                            // 4. 根据验证结果更新UI
+                            if (validationResults.TryGetValue("filesystem", out var result))
+                            {
+                                dev2Toggle.Content = result.IsAvailable ? "已启用 - 可用" : "已启用 - 验证失败";
+                                System.Diagnostics.Debug.WriteLine($"服务器 filesystem 验证完成. 状态: {(result.IsAvailable ? "成功" : "失败")}");
+                            }
+                            else
+                            {
+                                dev2Toggle.Content = "已启用 - 未知状态";
+                            }
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine("MCP文件系统服务启动失败");
+                            dev2Toggle.Content = "启动失败";
+                        }
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("未找到MCP文件系统服务配置");
+                        dev2Toggle.Content = "配置缺失";
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("请求禁用MCP文件系统服务...");
+                    
+                    // 1. 获取服务器配置并更新为禁用
+                    var configs = await App.McpService.GetConfigsAsync();
+                    if (configs.TryGetValue("filesystem", out var config))
+                    {
+                        config.IsEnabled = false;
+                        await App.McpService.SaveConfigsAsync(configs);
+                    }
+                    
+                    // 2. 停止底层服务器
+                    bool stopped = await App.McpService.StopServerAsync("filesystem");
+                    System.Diagnostics.Debug.WriteLine($"MCP文件系统服务停止{(stopped ? "成功" : "失败")}");
+
+                    // 3. 重置验证状态，以便下次可以重新验证
+                    App.McpAutoValidationService.ResetValidationState("filesystem");
+                    
+                    // 4. 更新UI
+                    dev2Toggle.Content = "已禁用";
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"MCP文件系统服务操作异常: {ex.Message}");
+                dev2Toggle.Content = "操作异常";
+            }
         }
     }
 

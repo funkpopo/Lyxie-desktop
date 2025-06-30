@@ -54,24 +54,34 @@ namespace Lyxie_desktop.Services
 
             try
             {
+                // 使用PowerShell或CMD来启动MCP服务
+                bool useCmd = false; // 设置为true使用CMD, false使用PowerShell
+                string shellExecutable = useCmd ? "cmd.exe" : "powershell.exe";
+                string shellArgs = useCmd ? "/c " : "-NoProfile -ExecutionPolicy Bypass -Command ";
+                
+                // 构建完整命令
+                string fullCommand = definition.Command!;
+                
+                // 添加参数
+                if (definition.Args != null && definition.Args.Count > 0)
+                {
+                    // 对参数进行适当的引号处理
+                    var processedArgs = definition.Args.Select(arg => arg.Contains(" ") ? $"\"{arg}\"" : arg);
+                    fullCommand += " " + string.Join(" ", processedArgs);
+                }
+                
+                // 构建ProcessStartInfo
                 var processStartInfo = new ProcessStartInfo
                 {
-                    FileName = definition.Command!,
+                    FileName = shellExecutable,
                     UseShellExecute = false,
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    // 移除对命令的额外包装，直接使用完整命令
+                    Arguments = shellArgs + fullCommand
                 };
-
-                // 添加参数
-                if (definition.Args != null)
-                {
-                    foreach (var arg in definition.Args)
-                    {
-                        processStartInfo.ArgumentList.Add(arg);
-                    }
-                }
 
                 var process = new Process { StartInfo = processStartInfo };
                 
@@ -486,26 +496,47 @@ namespace Lyxie_desktop.Services
             {
                 if (e.Data == null) return;
 
-                try
+                // 快速检查是否可能是JSON (包含{ 和 })，避免不必要的解析尝试
+                if (e.Data.Contains("{") && e.Data.Contains("}") && e.Data.Contains("\"id\""))
                 {
-                    using var jsonDoc = JsonDocument.Parse(e.Data);
-                    if (jsonDoc.RootElement.TryGetProperty("id", out var idElement))
+                    try
                     {
-                        var id = idElement.ToString();
-                        if (_pendingRequests.TryRemove(id, out var tcs))
+                        using var jsonDoc = JsonDocument.Parse(e.Data);
+                        if (jsonDoc.RootElement.TryGetProperty("id", out var idElement))
                         {
-                            tcs.TrySetResult(e.Data);
+                            var id = idElement.ToString();
+                            if (_pendingRequests.TryRemove(id, out var tcs))
+                            {
+                                tcs.TrySetResult(e.Data);
+                                return; // 成功处理，直接返回，不再输出日志
+                            }
                         }
                     }
+                    catch (JsonException)
+                    {
+                        // JSON解析失败，静默处理，继续作为普通输出
+                    }
                 }
-                catch (JsonException)
-                {
-                    // 不是有效的JSON或不包含ID，可能是通知或日志，直接路由到调试输出
-                    _owner.HandleOutput(_serverName, e.Data);
-                }
+                
+                // 非JSON输出或不包含请求ID的JSON，作为日志处理
+                _owner.HandleOutput(_serverName, e.Data);
             }
             
-            private void HandleError(object sender, DataReceivedEventArgs e) => _owner.HandleError(_serverName, e.Data);
+            private void HandleError(object sender, DataReceivedEventArgs e)
+            {
+                // 避免处理大量的错误输出
+                if (e.Data == null || e.Data.Length > 1000)
+                {
+                    // 对于超长的错误消息，只记录前100个字符
+                    if (e.Data != null && e.Data.Length > 1000)
+                    {
+                        _owner.HandleError(_serverName, e.Data.Substring(0, 100) + "... (日志过长，已截断)");
+                    }
+                    return;
+                }
+                
+                _owner.HandleError(_serverName, e.Data);
+            }
 
             public async Task<string?> SendRequestAsync(string request, CancellationToken cancellationToken)
             {

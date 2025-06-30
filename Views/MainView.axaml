@@ -344,22 +344,28 @@
 
                 <!-- 开发功能2开关行 -->
                 <materialIcons:MaterialIcon Grid.Row="3" Grid.Column="0"
-                                            Kind="Code"
+                                            Kind="FileTree"
                                             Width="16"
                                             Height="16"
                                             Foreground="{DynamicResource SecondaryIconBrush}"
                                             VerticalAlignment="Center"
                                             Margin="0,8,8,4"/>
-                <TextBlock Grid.Row="3" Grid.Column="1"
-                           Text="开发功能2"
-                           FontSize="12"
-                           Foreground="{DynamicResource SecondaryTextBrush}"
-                           VerticalAlignment="Center"
-                           Margin="0,8,8,4"/>
+                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Vertical" Margin="0,8,8,4">
+                    <TextBlock Text="MCP 工具"
+                              FontSize="12"
+                              Foreground="{DynamicResource SecondaryTextBrush}"
+                              VerticalAlignment="Center"/>
+                    <TextBlock Text="文件系统"
+                              FontSize="10"
+                              Opacity="0.8"
+                              Foreground="{DynamicResource SecondaryTextBrush}"
+                              VerticalAlignment="Center"/>
+                </StackPanel>
                 <ToggleSwitch Grid.Row="3" Grid.Column="2"
                               Name="Dev2Toggle"
-                              OffContent=""
-                              OnContent=""
+                              OffContent="未启用"
+                              OnContent="已启用"
+                              Content="未验证"
                               Width="46"
                               Height="28"
                               IsHitTestVisible="True"

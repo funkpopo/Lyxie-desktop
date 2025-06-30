@@ -4,6 +4,7 @@ using Avalonia.Markup.Xaml;
 using Lyxie_desktop.Services;
 using Lyxie_desktop.Views;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -26,6 +27,15 @@ public partial class App : Application
     
     // 全局MCP服务实例
     public static IMcpService McpService { get; private set; } = new McpService();
+    
+    // 全局MCP服务器管理实例
+    public static IMcpServerManager McpServerManager { get; private set; }
+    
+    // 全局MCP自动验证服务实例
+    public static IMcpAutoValidationService McpAutoValidationService { get; private set; }
+    
+    // 全局TTS服务实例
+    public static TtsApiService TtsApiService { get; private set; } = new TtsApiService();
     
     // 全局应用程序设置
     public static AppSettings Settings { get; private set; } = new AppSettings();
@@ -201,7 +211,33 @@ public partial class App : Application
         {
             System.Diagnostics.Debug.WriteLine("正在启动MCP服务...");
             
-            // 启动所有已启用的MCP服务器
+            // 首先获取所有配置
+            var configs = await McpService.GetConfigsAsync();
+            
+            // 确保filesystem服务器配置存在
+            if (!configs.ContainsKey("filesystem"))
+            {
+                // 创建默认配置
+                configs["filesystem"] = new Models.McpServerDefinition
+                {
+                    Command = "npx",
+                    Args = new List<string> { "-y", "@modelcontextprotocol/server-filesystem", "D:\\Projects" },
+                    IsEnabled = Settings.EnableDev2, // 根据设置决定是否启用
+                    AutoValidationEnabled = false,   // 默认不自动验证
+                    ValidationInterval = 60          // 验证间隔60秒
+                };
+                await McpService.SaveConfigsAsync(configs);
+                System.Diagnostics.Debug.WriteLine("已创建MCP filesystem服务默认配置");
+            }
+            else
+            {
+                // 更新现有配置状态
+                configs["filesystem"].IsEnabled = Settings.EnableDev2;
+                await McpService.SaveConfigsAsync(configs);
+                System.Diagnostics.Debug.WriteLine($"已更新MCP filesystem服务配置: 启用状态={Settings.EnableDev2}");
+            }
+            
+            // 只启动已启用的MCP服务器
             var startResults = await McpService.StartAllServersAsync();
             var successCount = startResults.Count(r => r.Value);
             System.Diagnostics.Debug.WriteLine($"MCP服务器启动完成: {successCount}/{startResults.Count} 个服务器启动成功");
@@ -210,21 +246,25 @@ public partial class App : Application
             await McpService.StartAutoValidationAsync();
             System.Diagnostics.Debug.WriteLine("MCP自动验证已启动");
             
-            // 延迟触发一次完整验证，确保状态同步
-            _ = Task.Run(async () =>
+            // 跳过额外验证，避免资源浪费
+            System.Diagnostics.Debug.WriteLine("跳过额外的初始化验证，由UI控件根据需要触发验证");
+
+            // 从 McpService 获取其他服务实例
+            McpServerManager = McpService.ServerManager;
+            McpAutoValidationService = McpService.AutoValidationService;
+
+            // 启动自动验证服务
+            _ = McpAutoValidationService.StartAsync();
+
+            // 更新自动验证配置
+            Task.Run(async () =>
             {
-                await Task.Delay(2000); // 等待2秒让服务器充分启动
-                try
-                {
-                    var validationResults = await McpService.AutoValidationService.TriggerValidationAsync();
-                    var validatedCount = validationResults.Count(r => r.Value.IsAvailable);
-                    System.Diagnostics.Debug.WriteLine($"启动后验证完成: {validatedCount}/{validationResults.Count} 个服务器验证成功");
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"启动后验证失败: {ex.Message}");
-                }
+                var configs = await McpService.GetConfigsAsync();
+                await McpAutoValidationService.UpdateConfigurationAsync(configs);
             });
+            
+            // 初始化TTS服务
+            // TtsApiService = new TtsApiService(); // 已在属性声明时初始化
         }
         catch (Exception ex)
         {

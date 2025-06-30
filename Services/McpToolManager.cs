@@ -376,7 +376,7 @@ namespace Lyxie_desktop.Services
                         result.ErrorMessage = "工具执行返回错误";
                         result.Content = ExtractErrorContent(toolResponse);
                     }
-                    else if (toolResponse?.Content != null && toolResponse.Content.Count > 0)
+                    else if (toolResponse != null && toolResponse.Content != null && toolResponse.Content.Count > 0)
                     {
                         result.IsSuccess = true;
                         result.Content = ExtractTextContent(toolResponse.Content);

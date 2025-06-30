@@ -32,6 +32,11 @@ namespace Lyxie_desktop.Services
         /// </summary>
         public IMcpAutoValidationService AutoValidationService => _autoValidationService;
 
+        /// <summary>
+        /// 获取服务器管理器实例
+        /// </summary>
+        public IMcpServerManager ServerManager => _serverManager;
+
         public Task<Dictionary<string, McpServerDefinition>> GetConfigsAsync()
         {
             return McpConfigHelper.LoadConfigsAsync();
