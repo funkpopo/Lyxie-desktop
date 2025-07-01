@@ -64,6 +64,9 @@ public partial class MainView : UserControl
     
     // MCP工具管理器
     private McpToolManager? _mcpToolManager;
+    
+    // 工具调用执行器
+    private ToolCallExecutor? _toolCallExecutor;
 
     public MainView()
     {
@@ -474,9 +477,14 @@ public partial class MainView : UserControl
             // MCP文件系统工具切换
             try
             {
+                // 防止重复操作
+                dev2Toggle.IsEnabled = false;
+                Debug.WriteLine($"MCP开关切换: {(isEnabled ? "开启" : "关闭")}");
+                
                 if (isEnabled)
                 {
-                    System.Diagnostics.Debug.WriteLine("请求启用MCP文件系统服务...");
+                    dev2Toggle.Content = "正在启用...";
+                    Debug.WriteLine("请求启用MCP文件系统服务...");
                     
                     // 获取服务器配置
                     var configs = await App.McpService.GetConfigsAsync();
@@ -484,68 +492,137 @@ public partial class MainView : UserControl
                     {
                         // 1. 更新配置为启用
                         config.IsEnabled = true;
+                        Debug.WriteLine("更新服务器配置状态为启用");
                         await App.McpService.SaveConfigsAsync(configs);
                         
-                        // 2. 启动底层服务器
-                        bool started = await App.McpService.StartServerAsync("filesystem");
-                        if (started)
+                        // 2. 先检查服务是否已运行，避免重复启动
+                        bool isRunning = App.McpService.IsServerRunning("filesystem");
+                        Debug.WriteLine($"检查服务器是否已运行: {isRunning}");
+                        
+                        bool needsStart = !isRunning;
+                        bool success = isRunning; // 如果已运行，则视为成功
+                        
+                        // 如果需要启动
+                        if (needsStart)
                         {
-                            System.Diagnostics.Debug.WriteLine("MCP文件系统服务已启动，现触发一次性验证...");
+                            // 启动底层服务器
+                            Debug.WriteLine("服务器未运行，尝试启动...");
+                            success = await App.McpService.StartServerAsync("filesystem");
+                            Debug.WriteLine($"服务器启动结果: {success}");
+                        }
+                        
+                        if (success)
+                        {
+                            Debug.WriteLine("MCP文件系统服务已启动，现触发验证...");
                             dev2Toggle.Content = "正在验证...";
                             
-                            // 3. 触发"一次性"验证
-                            var validationResults = await App.McpAutoValidationService.TriggerValidationAsync(forceCheck: false);
-                            
-                            // 4. 根据验证结果更新UI
-                            if (validationResults.TryGetValue("filesystem", out var result))
+                            // 强制状态更新
+                            if (isRunning && !config.IsRunning)
                             {
-                                dev2Toggle.Content = result.IsAvailable ? "已启用 - 可用" : "已启用 - 验证失败";
-                                System.Diagnostics.Debug.WriteLine($"服务器 filesystem 验证完成. 状态: {(result.IsAvailable ? "成功" : "失败")}");
+                                config.IsRunning = true;
+                                await App.McpService.SaveConfigsAsync(configs);
+                            }
+                            
+                            // 强制重新验证
+                            var validationResults = await App.McpAutoValidationService.TriggerValidationAsync(forceCheck: true);
+                            
+                            // 重新获取配置以获取最新状态
+                            configs = await App.McpService.GetConfigsAsync();
+                            if (configs.TryGetValue("filesystem", out config))
+                            {
+                                // 更新UI状态
+                                bool available = config.IsAvailable;
+                                dev2Toggle.Content = available ? "已启用 - 可用" : "已启用 - 验证失败";
+                                Debug.WriteLine($"服务器验证完成，状态: {(available ? "可用" : "不可用")}");
+                                
+                                // 如果验证失败，记录错误信息
+                                if (!available && validationResults.TryGetValue("filesystem", out var result))
+                                {
+                                    Debug.WriteLine($"验证失败原因: {result.ErrorMessage ?? "未知"}");
+                                }
                             }
                             else
                             {
                                 dev2Toggle.Content = "已启用 - 未知状态";
+                                Debug.WriteLine("无法获取服务器配置");
                             }
                         }
                         else
                         {
-                            System.Diagnostics.Debug.WriteLine("MCP文件系统服务启动失败");
+                            Debug.WriteLine("MCP文件系统服务启动失败");
                             dev2Toggle.Content = "启动失败";
+                            
+                            // 还原设置
+                            App.Settings.EnableDev2 = false;
+                            App.SaveSettings();
+                            
+                            // 修正开关状态，避免UI和实际状态不一致
+                            dev2Toggle.IsChecked = false;
                         }
                     }
                     else
                     {
-                        System.Diagnostics.Debug.WriteLine("未找到MCP文件系统服务配置");
+                        Debug.WriteLine("未找到MCP文件系统服务配置");
                         dev2Toggle.Content = "配置缺失";
+                        
+                        // 还原设置
+                        App.Settings.EnableDev2 = false;
+                        App.SaveSettings();
+                        
+                        // 修正开关状态
+                        dev2Toggle.IsChecked = false;
                     }
                 }
                 else
                 {
-                    System.Diagnostics.Debug.WriteLine("请求禁用MCP文件系统服务...");
+                    dev2Toggle.Content = "正在禁用...";
+                    Debug.WriteLine("请求禁用MCP文件系统服务...");
                     
                     // 1. 获取服务器配置并更新为禁用
                     var configs = await App.McpService.GetConfigsAsync();
                     if (configs.TryGetValue("filesystem", out var config))
                     {
                         config.IsEnabled = false;
+                        Debug.WriteLine("更新服务器配置状态为禁用");
                         await App.McpService.SaveConfigsAsync(configs);
+                        
+                        // 清除验证状态
+                        App.McpAutoValidationService.ResetValidationState("filesystem");
                     }
                     
                     // 2. 停止底层服务器
-                    bool stopped = await App.McpService.StopServerAsync("filesystem");
-                    System.Diagnostics.Debug.WriteLine($"MCP文件系统服务停止{(stopped ? "成功" : "失败")}");
+                    bool isRunning = App.McpService.IsServerRunning("filesystem");
+                    if (isRunning)
+                    {
+                        Debug.WriteLine("服务器正在运行，尝试停止...");
+                        bool stopped = await App.McpService.StopServerAsync("filesystem");
+                        Debug.WriteLine($"MCP文件系统服务停止{(stopped ? "成功" : "失败")}");
+                    }
+                    else
+                    {
+                        Debug.WriteLine("服务器未运行，无需停止");
+                    }
 
-                    // 3. 重置验证状态，以便下次可以重新验证
-                    App.McpAutoValidationService.ResetValidationState("filesystem");
-                    
-                    // 4. 更新UI
+                    // 3. 更新UI
                     dev2Toggle.Content = "已禁用";
+                    Debug.WriteLine("UI状态更新为已禁用");
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"MCP文件系统服务操作异常: {ex.Message}");
+                Debug.WriteLine($"MCP文件系统服务操作异常: {ex.Message}");
                 dev2Toggle.Content = "操作异常";
+                
+                // 还原UI状态
+                if (dev2Toggle.IsChecked != App.Settings.EnableDev2)
+                {
+                    dev2Toggle.IsChecked = App.Settings.EnableDev2;
+                }
+            }
+            finally
+            {
+                // 恢复开关可用性
+                dev2Toggle.IsEnabled = true;
             }
         }
     }
@@ -1791,12 +1868,9 @@ public partial class MainView : UserControl
             messageScrollViewer?.ScrollToEnd();
         }, DispatcherPriority.Background);
         
-        // 创建AI回复的流式消息气泡
-        MessageBubble? aiBubble = null;
-        
         try
         {
-            // 获取当前激活的LLM API配置（实时读取最新配置）
+            // 获取当前激活的LLM API配置
             if (App.Settings.LlmApiConfigs == null || App.Settings.LlmApiConfigs.Count == 0)
             {
                 await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1812,237 +1886,35 @@ public partial class MainView : UserControl
             var activeConfigIndex = App.Settings.ActiveLlmConfigIndex;
             if (activeConfigIndex < 0 || activeConfigIndex >= App.Settings.LlmApiConfigs.Count)
             {
-                activeConfigIndex = 0; // 默认使用第一个配置
+                activeConfigIndex = 0;
                 App.Settings.ActiveLlmConfigIndex = 0;
                 App.SaveSettings();
             }
 
             var config = App.Settings.LlmApiConfigs[activeConfigIndex];
-            
             System.Diagnostics.Debug.WriteLine($"使用LLM配置: {config.Name} ({config.ModelName}) - {config.ApiUrl}");
 
-            // 获取MCP工具调用上下文
-            string? toolContext = null;
-            if (_mcpToolManager != null)
-            {
-                try
-                {
-                    System.Diagnostics.Debug.WriteLine("开始获取MCP工具调用上下文...");
-                    var mcpContext = await _mcpToolManager.GenerateToolContextAsync(message, _cancellationTokenSource.Token);
-                    
-                    if (mcpContext.Results.Count > 0)
-                    {
-                        toolContext = mcpContext.GetFormattedResults();
-                        System.Diagnostics.Debug.WriteLine($"MCP工具调用完成，获得 {mcpContext.Results.Count} 个结果");
-                        
-                        // 在UI中显示工具调用状态
-                        await Dispatcher.UIThread.InvokeAsync(() =>
-                        {
-                            var toolInfoBubble = new MessageBubble();
-                            toolInfoBubble.SetMessage($"🔧 已调用 {mcpContext.Results.Count} 个相关工具获取信息", false, "工具");
-                            toolInfoBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                            messageList.Children.Add(toolInfoBubble);
-                            messageScrollViewer?.ScrollToEnd();
-                        });
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine("未找到相关的MCP工具或工具调用失败");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"MCP工具调用异常: {ex.Message}");
-                    // 工具调用失败不影响正常的LLM对话
-                }
-            }
-
-            // 在UI线程中创建AI消息气泡并初始化为流式模式
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                aiBubble = new MessageBubble();
-                aiBubble.InitializeStreamingMessage(false, "Lyxie");
-                aiBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                messageList.Children.Add(aiBubble);
-                messageScrollViewer?.ScrollToEnd();
-            });
-
-            // 使用LLM API服务发送流式请求
-            var apiService = new LlmApiService();
-            
-            var success = await apiService.SendStreamingMessageAsync(
-                config,
-                message,
-                toolContext, // 传递工具调用上下文
-                onDataReceived: (content, isComplete) =>
-                {
-                    if (aiBubble != null)
-                    {
-                        // 累积内容用于TTS
-                        if (!string.IsNullOrEmpty(content))
-                        {
-                            _currentAiResponseBuilder?.Append(content);
-                        }
-
-                        if (isComplete)
-                        {
-                            // 流式接收完成，启用Markdown渲染
-                            aiBubble.CompleteStreamingAndEnableMarkdown();
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                messageScrollViewer?.ScrollToEnd();
-                            });
-                            
-                            // 使用累积的完整回复播放TTS
-                            var fullAiResponse = _currentAiResponseBuilder?.ToString();
-                            if (!string.IsNullOrWhiteSpace(fullAiResponse))
-                            {
-                                // 保存AI回复到数据库
-                                _ = SaveMessageToCurrentSession(fullAiResponse, MessageType.Assistant);
-                                
-                                HandleAiResponseForTts(fullAiResponse, aiBubble);
-                            }
-                        }
-                        else if (!string.IsNullOrEmpty(content))
-                        {
-                            // 追加内容到UI
-                            aiBubble.AppendContent(content);
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                messageScrollViewer?.ScrollToEnd();
-                            });
-                        }
-                    }
-                },
-                onError: (error) =>
-                {
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        if (aiBubble != null && messageList.Children.Contains(aiBubble))
-                        {
-                            messageList.Children.Remove(aiBubble);
-                        }
-                        
-                        var errorBubble = new MessageBubble();
-                        errorBubble.SetMessage($"流式请求错误：{error}", false, "错误");
-                        errorBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                        messageList.Children.Add(errorBubble);
-                        messageScrollViewer?.ScrollToEnd();
-                    });
-                },
-                _cancellationTokenSource.Token
-            );
-
-            if (!success)
-            {
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    if (aiBubble != null && messageList.Children.Contains(aiBubble))
-                    {
-                        // 尝试保留已有内容并完成Markdown渲染
-                        try
-                        {
-                            aiBubble.CompleteStreamingAndEnableMarkdown();
-                            System.Diagnostics.Debug.WriteLine("流式请求失败，但保留了已有内容并完成Markdown渲染");
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"完成Markdown渲染时出错: {ex.Message}");
-                            // 如果Markdown渲染也失败，则移除aiBubble
-                            messageList.Children.Remove(aiBubble);
-                        }
-                    }
-                    
-                    // 如果aiBubble中没有内容或处理失败，显示错误提示
-                    if (aiBubble == null || !messageList.Children.Contains(aiBubble))
-                    {
-                        var errorBubble = new MessageBubble();
-                        errorBubble.SetMessage("无法启动流式请求，请检查API配置。", false, "错误");
-                        errorBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                        messageList.Children.Add(errorBubble);
-                    }
-                });
-            }
+            // 开始函数调用工作流
+            await ProcessConversationWithToolsAsync(config, message, messageList, messageScrollViewer);
         }
         catch (OperationCanceledException)
         {
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                // 请求被用户取消
-                System.Diagnostics.Debug.WriteLine("请求被用户取消。");
-                if (aiBubble != null && messageList.Children.Contains(aiBubble))
-                {
-                    // 尝试保留已有内容并完成Markdown渲染
-                    try
-                    {
-                        aiBubble.CompleteStreamingAndEnableMarkdown();
-                        System.Diagnostics.Debug.WriteLine("请求被取消，但保留了已有内容并完成Markdown渲染");
-                        
-                        // 添加取消提示（如果有内容则不替换，只添加提示）
-                        var cancelledBubble = new MessageBubble();
-                        cancelledBubble.SetMessage("（流式传输已被用户中止）", false, "系统");
-                        cancelledBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                        messageList.Children.Add(cancelledBubble);
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"完成Markdown渲染时出错: {ex.Message}");
-                        // 如果Markdown渲染失败，则移除aiBubble并显示取消消息
-                        messageList.Children.Remove(aiBubble);
-                        var cancelledBubble = new MessageBubble();
-                        cancelledBubble.SetMessage("消息请求已取消。", false, "系统");
-                        cancelledBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                        messageList.Children.Add(cancelledBubble);
-                    }
-                }
-                else
-                {
-                    var cancelledBubble = new MessageBubble();
-                    cancelledBubble.SetMessage("消息请求已取消。", false, "系统");
-                    cancelledBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                    messageList.Children.Add(cancelledBubble);
-                }
+                var cancelledBubble = new MessageBubble();
+                cancelledBubble.SetMessage("消息请求已取消。", false, "系统");
+                cancelledBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                messageList.Children.Add(cancelledBubble);
             });
         }
         catch (Exception ex)
         {
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                // 尝试保留已有内容
-                if (aiBubble != null && messageList.Children.Contains(aiBubble))
-                {
-                    try
-                    {
-                        aiBubble.CompleteStreamingAndEnableMarkdown();
-                        System.Diagnostics.Debug.WriteLine("发生异常，但保留了已有内容并完成Markdown渲染");
-                        
-                        // 添加错误提示
-                        var errorBubble = new MessageBubble();
-                        errorBubble.SetMessage($"发生错误：{ex.Message}", false, "错误");
-                        errorBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                        messageList.Children.Add(errorBubble);
-                    }
-                    catch (Exception renderEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"完成Markdown渲染时出错: {renderEx.Message}");
-                        // 如果Markdown渲染失败，则移除aiBubble
-                        messageList.Children.Remove(aiBubble);
-                        
-                        // 显示异常信息
-                        var errorBubble = new MessageBubble();
-                        errorBubble.SetMessage($"发生错误：{ex.Message}", false, "错误");
-                        errorBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                        messageList.Children.Add(errorBubble);
-                    }
-                }
-                else
-                {
-                    // 显示异常信息
-                    var errorBubble = new MessageBubble();
-                    errorBubble.SetMessage($"发生错误：{ex.Message}", false, "错误");
-                    errorBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                    messageList.Children.Add(errorBubble);
-                }
+                var errorBubble = new MessageBubble();
+                errorBubble.SetMessage($"发生错误：{ex.Message}", false, "错误");
+                errorBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                messageList.Children.Add(errorBubble);
             });
             
             System.Diagnostics.Debug.WriteLine($"发送消息异常: {ex}");
@@ -2083,16 +1955,96 @@ public partial class MainView : UserControl
     /// <summary>
     /// 初始化MCP工具管理器
     /// </summary>
-    private void InitializeMcpToolManager()
+    private async void InitializeMcpToolManager()
     {
         try
         {
+            Debug.WriteLine("开始初始化MCP工具管理器...");
+            
+            // 创建必要的服务实例
             var mcpService = new McpService();
-            var serverManager = new McpServerManager();
+            var serverManager = mcpService.ServerManager;
             _mcpToolManager = new McpToolManager(mcpService, serverManager);
+            
+            // 初始化工具调用执行器
+            _toolCallExecutor = new ToolCallExecutor(_mcpToolManager);
             
             // 订阅工具调用状态事件
             _mcpToolManager.ToolCallStatusChanged += OnToolCallStatusChanged;
+            _toolCallExecutor.ToolCallExecutionStarted += OnToolCallExecutionStarted;
+            _toolCallExecutor.ToolCallExecutionCompleted += OnToolCallExecutionCompleted;
+            _toolCallExecutor.ToolCallExecutionFailed += OnToolCallExecutionFailed;
+            
+            // 如果设置中启用了MCP，则检查并确保服务正确启动
+            if (App.Settings.EnableDev2)
+            {
+                Debug.WriteLine("MCP功能已在设置中启用，检查服务状态...");
+                
+                var configs = await mcpService.GetConfigsAsync();
+                if (configs.TryGetValue("filesystem", out var config))
+                {
+                    // 检查文件系统服务器状态并修复
+                    bool isRunning = serverManager.IsServerRunning("filesystem");
+                    Debug.WriteLine($"文件系统服务状态检查: 运行状态={isRunning}, 配置启用状态={config.IsEnabled}, 记录运行状态={config.IsRunning}");
+                    
+                    // 修复状态不一致的情况
+                    if (config.IsEnabled)
+                    {
+                        // 如果配置为启用但未运行，尝试启动
+                        if (!isRunning)
+                        {
+                            Debug.WriteLine("文件系统服务配置为启用但未运行，尝试启动...");
+                            bool started = await mcpService.StartServerAsync("filesystem");
+                            Debug.WriteLine($"文件系统服务启动结果: {started}");
+                            
+                            // 如果启动成功，更新UI
+                            if (started)
+                            {
+                                var dev2Toggle = this.FindControl<ToggleSwitch>("Dev2Toggle");
+                                if (dev2Toggle != null)
+                                {
+                                    dev2Toggle.Content = "已启用 - 验证中";
+                                    Debug.WriteLine("更新UI开关状态: 已启用 - 验证中");
+                                }
+                                
+                                // 触发验证
+                                var result = await mcpService.ValidateServerAsync("filesystem", config);
+                                
+                                // 更新UI显示验证结果
+                                if (dev2Toggle != null)
+                                {
+                                    dev2Toggle.Content = result.IsAvailable ? "已启用 - 可用" : "已启用 - 验证失败";
+                                    Debug.WriteLine($"更新UI开关状态: {dev2Toggle.Content}");
+                                }
+                            }
+                        }
+                        else if (!config.IsRunning) 
+                        {
+                            // 如果实际在运行但状态记录不正确，修复状态
+                            Debug.WriteLine("文件系统服务实际运行中但状态记录不正确，修复状态...");
+                            config.IsRunning = true;
+                            await mcpService.SaveConfigsAsync(configs);
+                            
+                            // 更新UI
+                            var dev2Toggle = this.FindControl<ToggleSwitch>("Dev2Toggle");
+                            if (dev2Toggle != null)
+                            {
+                                dev2Toggle.Content = "已启用 - 可用";
+                                Debug.WriteLine("更新UI开关状态: 已启用 - 可用");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // 如果配置为禁用但实际在运行，停止服务
+                        if (isRunning)
+                        {
+                            Debug.WriteLine("文件系统服务配置为禁用但实际在运行，停止服务...");
+                            await mcpService.StopServerAsync("filesystem");
+                        }
+                    }
+                }
+            }
             
             Debug.WriteLine("MCP工具管理器初始化成功");
         }
@@ -2112,6 +2064,43 @@ public partial class MainView : UserControl
             Debug.WriteLine($"工具调用状态: {e.Status} - {e.ToolName} ({e.ServerName}): {e.Message}");
             
             // 可以在这里添加UI状态更新，比如显示工具调用进度
+        });
+    }
+
+    /// <summary>
+    /// 工具调用执行开始事件处理
+    /// </summary>
+    private void OnToolCallExecutionStarted(object? sender, ToolCallExecutionEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            var toolName = e.Execution.LlmToolCall.Function?.Name ?? "未知工具";
+            Debug.WriteLine($"工具调用开始: {toolName}");
+        });
+    }
+
+    /// <summary>
+    /// 工具调用执行完成事件处理
+    /// </summary>
+    private void OnToolCallExecutionCompleted(object? sender, ToolCallExecutionEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            var toolName = e.Execution.LlmToolCall.Function?.Name ?? "未知工具";
+            Debug.WriteLine($"工具调用完成: {toolName}");
+        });
+    }
+
+    /// <summary>
+    /// 工具调用执行失败事件处理
+    /// </summary>
+    private void OnToolCallExecutionFailed(object? sender, ToolCallExecutionEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            var toolName = e.Execution.LlmToolCall.Function?.Name ?? "未知工具";
+            var error = e.Execution.ErrorMessage ?? "未知错误";
+            Debug.WriteLine($"工具调用失败: {toolName} - {error}");
         });
     }
 
@@ -2288,4 +2277,300 @@ public partial class MainView : UserControl
     }
 
     #endregion
+
+    /// <summary>
+    /// 处理带工具调用的对话流程
+    /// </summary>
+    private async Task ProcessConversationWithToolsAsync(
+        LlmApiConfig config, 
+        string userMessage, 
+        StackPanel messageList, 
+        ScrollViewer? messageScrollViewer)
+    {
+        if (_mcpToolManager == null || _toolCallExecutor == null)
+        {
+            // 如果工具管理器未初始化，使用普通对话模式
+            await ProcessNormalConversationAsync(config, userMessage, messageList, messageScrollViewer);
+            return;
+        }
+
+        try
+        {
+            // 1. 获取可用工具
+            var availableTools = await _mcpToolManager.GetAvailableToolsAsync(_cancellationTokenSource.Token);
+            Debug.WriteLine($"获取到 {availableTools.Count} 个可用工具");
+
+            // 2. 构建对话历史
+            var conversationMessages = new List<ConversationMessage>
+            {
+                new ConversationMessage
+                {
+                    Role = "user",
+                    Content = userMessage
+                }
+            };
+
+            // 3. 创建AI回复气泡
+            MessageBubble? aiBubble = null;
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                aiBubble = new MessageBubble();
+                aiBubble.InitializeStreamingMessage(false, "Lyxie");
+                aiBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                messageList.Children.Add(aiBubble);
+                messageScrollViewer?.ScrollToEnd();
+            });
+
+            // 4. 开始多轮对话处理
+            var maxRounds = 5; // 最大工具调用轮次
+            var currentRound = 0;
+            var apiService = new LlmApiService();
+
+            while (currentRound < maxRounds)
+            {
+                currentRound++;
+                Debug.WriteLine($"开始第 {currentRound} 轮对话");
+
+                // 发送对话请求到LLM
+                LlmResponse? llmResponse = null;
+                var responseReceived = false;
+
+                var success = await apiService.SendConversationAsync(
+                    config,
+                    conversationMessages,
+                    availableTools,
+                    onLlmResponse: (response, isComplete) =>
+                    {
+                        llmResponse = response;
+                        responseReceived = true;
+
+                        // 更新UI显示文本内容
+                        if (!string.IsNullOrEmpty(response.Content) && aiBubble != null)
+                        {
+                            _currentAiResponseBuilder?.Append(response.Content);
+                            
+                            Dispatcher.UIThread.Post(() =>
+                            {
+                                aiBubble.AppendContent(response.Content);
+                                messageScrollViewer?.ScrollToEnd();
+                            });
+                        }
+
+                        if (isComplete)
+                        {
+                            Debug.WriteLine($"LLM响应完成，包含 {response.ToolCalls.Count} 个工具调用");
+                        }
+                    },
+                    onError: (error) =>
+                    {
+                        Debug.WriteLine($"LLM请求错误: {error}");
+                        responseReceived = true;
+                    },
+                    _cancellationTokenSource.Token
+                );
+
+                if (!success || !responseReceived || llmResponse == null)
+                {
+                    Debug.WriteLine("LLM请求失败");
+                    break;
+                }
+
+                // 5. 检查是否有工具调用
+                if (!llmResponse.HasToolCalls)
+                {
+                    // 没有工具调用，对话结束
+                    Debug.WriteLine("对话完成，无工具调用");
+                    break;
+                }
+
+                // 6. 显示工具调用状态
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    var toolInfoBubble = new MessageBubble();
+                    toolInfoBubble.SetMessage($"🔧 正在执行 {llmResponse.ToolCalls.Count} 个工具调用...", false, "工具");
+                    toolInfoBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                    messageList.Children.Add(toolInfoBubble);
+                    messageScrollViewer?.ScrollToEnd();
+                });
+
+                // 7. 执行工具调用
+                var toolExecutions = await _toolCallExecutor.ExecuteToolCallsAsync(
+                    llmResponse.ToolCalls, 
+                    availableTools, 
+                    _cancellationTokenSource.Token);
+
+                // 8. 显示工具执行结果摘要
+                var executionSummary = _toolCallExecutor.FormatExecutionSummary(toolExecutions);
+                if (!string.IsNullOrEmpty(executionSummary))
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        var summaryBubble = new MessageBubble();
+                        summaryBubble.SetMessage(executionSummary, false, "工具");
+                        summaryBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                        messageList.Children.Add(summaryBubble);
+                        messageScrollViewer?.ScrollToEnd();
+                    });
+                }
+
+                // 9. 更新对话历史
+                // 添加LLM的响应（包含工具调用）
+                conversationMessages.Add(new ConversationMessage
+                {
+                    Role = "assistant",
+                    Content = llmResponse.Content,
+                    ToolCalls = llmResponse.ToolCalls
+                });
+
+                // 添加工具调用结果
+                var toolMessages = _toolCallExecutor.ConvertExecutionsToMessages(toolExecutions);
+                conversationMessages.AddRange(toolMessages);
+            }
+
+            // 10. 完成流式显示并保存消息
+            if (aiBubble != null)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    aiBubble.CompleteStreamingAndEnableMarkdown();
+                    messageScrollViewer?.ScrollToEnd();
+                });
+
+                // 保存AI回复到数据库
+                var fullAiResponse = _currentAiResponseBuilder?.ToString();
+                if (!string.IsNullOrWhiteSpace(fullAiResponse))
+                {
+                    await SaveMessageToCurrentSession(fullAiResponse, MessageType.Assistant);
+                    HandleAiResponseForTts(fullAiResponse, aiBubble);
+                }
+            }
+
+            if (currentRound >= maxRounds)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    var warningBubble = new MessageBubble();
+                    warningBubble.SetMessage("⚠️ 已达到最大工具调用轮次限制", false, "系统");
+                    warningBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                    messageList.Children.Add(warningBubble);
+                    messageScrollViewer?.ScrollToEnd();
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"工具调用流程异常: {ex.Message}");
+            throw; // 重新抛出异常，让上层处理
+        }
+    }
+
+    /// <summary>
+    /// 处理普通对话（无工具调用）
+    /// </summary>
+    private async Task ProcessNormalConversationAsync(
+        LlmApiConfig config, 
+        string userMessage, 
+        StackPanel messageList, 
+        ScrollViewer? messageScrollViewer)
+    {
+        MessageBubble? aiBubble = null;
+        
+        try
+        {
+            // 创建AI回复气泡
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                aiBubble = new MessageBubble();
+                aiBubble.InitializeStreamingMessage(false, "Lyxie");
+                aiBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                messageList.Children.Add(aiBubble);
+                messageScrollViewer?.ScrollToEnd();
+            });
+
+            var apiService = new LlmApiService();
+            
+            var success = await apiService.SendStreamingMessageAsync(
+                config,
+                userMessage,
+                onDataReceived: (content, isComplete) =>
+                {
+                    if (aiBubble != null)
+                    {
+                        if (!string.IsNullOrEmpty(content))
+                        {
+                            _currentAiResponseBuilder?.Append(content);
+                        }
+
+                        if (isComplete)
+                        {
+                            aiBubble.CompleteStreamingAndEnableMarkdown();
+                            Dispatcher.UIThread.Post(() =>
+                            {
+                                messageScrollViewer?.ScrollToEnd();
+                            });
+                            
+                            var fullAiResponse = _currentAiResponseBuilder?.ToString();
+                            if (!string.IsNullOrWhiteSpace(fullAiResponse))
+                            {
+                                _ = SaveMessageToCurrentSession(fullAiResponse, MessageType.Assistant);
+                                HandleAiResponseForTts(fullAiResponse, aiBubble);
+                            }
+                        }
+                        else if (!string.IsNullOrEmpty(content))
+                        {
+                            aiBubble.AppendContent(content);
+                            Dispatcher.UIThread.Post(() =>
+                            {
+                                messageScrollViewer?.ScrollToEnd();
+                            });
+                        }
+                    }
+                },
+                onError: (error) =>
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (aiBubble != null && messageList.Children.Contains(aiBubble))
+                        {
+                            messageList.Children.Remove(aiBubble);
+                        }
+                        
+                        var errorBubble = new MessageBubble();
+                        errorBubble.SetMessage($"请求错误：{error}", false, "错误");
+                        errorBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                        messageList.Children.Add(errorBubble);
+                        messageScrollViewer?.ScrollToEnd();
+                    });
+                },
+                _cancellationTokenSource.Token
+            );
+
+            if (!success && aiBubble != null)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (messageList.Children.Contains(aiBubble))
+                    {
+                        try
+                        {
+                            aiBubble.CompleteStreamingAndEnableMarkdown();
+                        }
+                        catch
+                        {
+                            messageList.Children.Remove(aiBubble);
+                            var errorBubble = new MessageBubble();
+                            errorBubble.SetMessage("无法启动请求，请检查API配置。", false, "错误");
+                            errorBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                            messageList.Children.Add(errorBubble);
+                        }
+                    }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"普通对话处理异常: {ex.Message}");
+            throw;
+        }
+    }
 }

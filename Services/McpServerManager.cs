@@ -9,6 +9,9 @@ using System.Threading.Tasks;
 using Lyxie_desktop.Interfaces;
 using Lyxie_desktop.Models;
 using Lyxie_desktop.Helpers;
+using System.Text;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Lyxie_desktop.Services
 {
@@ -18,6 +21,9 @@ namespace Lyxie_desktop.Services
     public class McpServerManager : IMcpServerManager, IDisposable
     {
         private readonly ConcurrentDictionary<string, McpServerDefinition> _serverDefinitions;
+        private readonly ConcurrentDictionary<string, Process> _serverProcesses;
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _pendingRequests;
+        private readonly ConcurrentDictionary<string, StringBuilder> _responseBuffers;
         private readonly object _lockObject = new object();
         private bool _disposed = false;
         private readonly JobObjectManager? _jobObjectManager;
@@ -25,6 +31,10 @@ namespace Lyxie_desktop.Services
         public McpServerManager()
         {
             _serverDefinitions = new ConcurrentDictionary<string, McpServerDefinition>();
+            _serverProcesses = new ConcurrentDictionary<string, Process>();
+            _pendingRequests = new ConcurrentDictionary<string, TaskCompletionSource<string>>();
+            _responseBuffers = new ConcurrentDictionary<string, StringBuilder>();
+            
             if (OperatingSystem.IsWindows())
             {
                 _jobObjectManager = new JobObjectManager();
@@ -91,12 +101,18 @@ namespace Lyxie_desktop.Services
                 process.EnableRaisingEvents = true;
                 process.Exited += (sender, e) => OnProcessExited(name, (Process)sender!);
 
+                // 初始化响应缓冲区
+                _responseBuffers.TryAdd(name, new StringBuilder());
+
                 // 异步读取输出
                 process.OutputDataReceived += (sender, args) => HandleOutput(name, args.Data);
                 process.ErrorDataReceived += (sender, args) => HandleError(name, args.Data);
                 
                 if (process.Start())
                 {
+                    // 添加到进程字典
+                    _serverProcesses.TryAdd(name, process);
+                    
                     // 在Windows上，将进程添加到Job Object
                     _jobObjectManager?.AddProcess(process);
 
@@ -131,13 +147,117 @@ namespace Lyxie_desktop.Services
         }
 
         /// <summary>
-        /// 向指定的stdio服务器发送请求并异步读取响应（此功能在此次重构中简化或禁用）
+        /// 向指定的stdio服务器发送请求并异步读取响应
         /// </summary>
-        public Task<string?> SendRequestAndReadResponseAsync(string name, string request, CancellationToken cancellationToken = default)
+        public async Task<string?> SendRequestAndReadResponseAsync(string name, string request, CancellationToken cancellationToken = default)
         {
-            // TODO: 如果需要，需要重新实现与直接管理的进程交互的逻辑
-            // 目前，这个功能将返回null
-            return Task.FromResult<string?>(null);
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(request))
+                return null;
+
+            if (!IsServerRunning(name))
+                return null;
+
+            // 清除之前可能存在的响应缓冲区
+            _responseBuffers.AddOrUpdate(name, new StringBuilder(), (key, oldValue) => new StringBuilder());
+
+            // 获取服务器进程
+            if (!_serverProcesses.TryGetValue(name, out var process) || process.HasExited)
+                return null;
+
+            // 从请求中提取请求ID，用于匹配响应
+            string requestId = ExtractRequestId(request);
+            if (string.IsNullOrEmpty(requestId))
+            {
+                Debug.WriteLine($"无法从请求中提取ID: {request}");
+                return null;
+            }
+
+            // 创建完成源，用于等待响应
+            var completionSource = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingRequests.TryAdd(requestId, completionSource);
+
+            try
+            {
+                // 请求添加换行符以便服务器处理
+                request += "\n";
+                
+                // 发送请求到进程的标准输入
+                await process.StandardInput.WriteAsync(request);
+                await process.StandardInput.FlushAsync();
+
+                // 等待响应，带超时
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10)); // 10秒超时
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+                
+                // 注册取消回调
+                using var registration = linkedCts.Token.Register(() => 
+                {
+                    if (!completionSource.Task.IsCompleted)
+                    {
+                        _pendingRequests.TryRemove(requestId, out _);
+                        completionSource.TrySetCanceled();
+                    }
+                });
+
+                // 等待响应完成
+                var responseTask = completionSource.Task;
+                
+                try
+                {
+                    var response = await responseTask;
+                    _pendingRequests.TryRemove(requestId, out _);
+                    return response;
+                }
+                catch (OperationCanceledException)
+                {
+                    Debug.WriteLine($"请求 {requestId} 超时或被取消");
+                    _pendingRequests.TryRemove(requestId, out _);
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"发送请求异常: {ex.Message}");
+                _pendingRequests.TryRemove(requestId, out _);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 从请求JSON中提取请求ID
+        /// </summary>
+        private string ExtractRequestId(string request)
+        {
+            try
+            {
+                var jObject = JObject.Parse(request);
+                return jObject["id"]?.ToString() ?? Guid.NewGuid().ToString();
+            }
+            catch
+            {
+                return Guid.NewGuid().ToString();
+            }
+        }
+
+        /// <summary>
+        /// 从响应中提取请求ID并处理响应
+        /// </summary>
+        private void ProcessJsonResponse(string response)
+        {
+            try
+            {
+                var jObject = JObject.Parse(response);
+                var id = jObject["id"]?.ToString();
+
+                if (!string.IsNullOrEmpty(id) && _pendingRequests.TryGetValue(id, out var completionSource))
+                {
+                    completionSource.TrySetResult(response);
+                }
+            }
+            catch (Newtonsoft.Json.JsonException ex)
+            {
+                Debug.WriteLine($"解析JSON响应失败: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -162,14 +282,39 @@ namespace Lyxie_desktop.Services
 
             bool stopped = false;
             
-            // 1. 尝试通过记录的PID停止进程
-            if (definition.ProcessId.HasValue && definition.ProcessId > 0)
+            // 首先尝试使用我们保存的进程引用
+            if (_serverProcesses.TryRemove(name, out var process))
             {
                 try
                 {
-                    var process = Process.GetProcessById((int)definition.ProcessId.Value);
+                    if (!process.HasExited)
+                    {
+                        process.Kill();
+                        stopped = true;
+                    }
+                    else
+                    {
+                        stopped = true; // 进程已退出
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"停止进程时出错: {ex.Message}");
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+            
+            // 如果上述方法失败，尝试使用PID
+            if (!stopped && definition.ProcessId.HasValue && definition.ProcessId > 0)
+            {
+                try
+                {
+                    var pidProcess = Process.GetProcessById((int)definition.ProcessId.Value);
                     // 不再检查进程名，直接终止
-                    process.Kill();
+                    pidProcess.Kill();
                     stopped = true;
                 }
                 catch (ArgumentException)
@@ -183,7 +328,7 @@ namespace Lyxie_desktop.Services
                 }
             }
             
-            // 2. 如果通过PID失败或没有PID，尝试通过进程名强制关闭
+            // 最后尝试通过进程名关闭
             if (!stopped && !string.IsNullOrEmpty(definition.Command))
             {
                 try
@@ -193,19 +338,19 @@ namespace Lyxie_desktop.Services
                     
                     if (processes.Length > 0)
                     {
-                        foreach (var process in processes)
+                        foreach (var p in processes)
                         {
                             try
                             {
-                                process.Kill();
+                                p.Kill();
                             }
                             catch (Exception ex)
                             {
-                                Debug.WriteLine($"强制关闭进程 {process.ProcessName} (ID: {process.Id}) 时出错: {ex.Message}");
+                                Debug.WriteLine($"强制关闭进程 {p.ProcessName} (ID: {p.Id}) 时出错: {ex.Message}");
                             }
                             finally
                             {
-                                process.Dispose();
+                                p.Dispose();
                             }
                         }
                         stopped = true;
@@ -216,6 +361,9 @@ namespace Lyxie_desktop.Services
                     Debug.WriteLine($"查找并关闭外部进程 {definition.Command} 时出错: {ex.Message}");
                 }
             }
+
+            // 清理相关资源
+            _responseBuffers.TryRemove(name, out _);
 
             // 更新状态
             definition.IsRunning = false;
@@ -238,14 +386,49 @@ namespace Lyxie_desktop.Services
             if (string.IsNullOrEmpty(name))
                 return false;
 
+            Debug.WriteLine($"检查服务器 {name} 是否运行中...");
+
             if (!_serverDefinitions.TryGetValue(name, out var definition))
             {
+                Debug.WriteLine($"服务器 {name} 的定义未找到");
                 return false;
             }
 
+            // HTTP服务器特殊处理
             if (definition.IsHttpServer)
             {
+                Debug.WriteLine($"服务器 {name} 是HTTP服务器，状态: {definition.IsRunning}");
                 return definition.IsRunning;
+            }
+            
+            // 首先检查我们保存的进程引用
+            if (_serverProcesses.TryGetValue(name, out var process))
+            {
+                try
+                {
+                    bool isRunning = !process.HasExited;
+                    Debug.WriteLine($"服务器 {name} 的进程引用检查结果: {isRunning}");
+                    if (isRunning)
+                    {
+                        // 确保定义状态与实际状态同步
+                        if (!definition.IsRunning)
+                        {
+                            Debug.WriteLine($"更新服务器 {name} 的状态为运行中");
+                            definition.IsRunning = true;
+                            definition.ProcessId = process.Id;
+                        }
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"检查进程引用出错: {ex.Message}");
+                    // 进程可能已无效，继续后续检查
+                }
+            }
+            else
+            {
+                Debug.WriteLine($"服务器 {name} 无进程引用");
             }
             
             // 检查是否有记录的进程ID并且该进程仍在运行
@@ -253,18 +436,67 @@ namespace Lyxie_desktop.Services
             {
                 try
                 {
-                    var process = Process.GetProcessById((int)definition.ProcessId.Value);
-                    // 注意：现在启动的是shell进程(cmd.exe或powershell.exe)，不再检查进程名匹配
+                    var pid = definition.ProcessId.Value;
+                    Debug.WriteLine($"尝试通过PID {pid} 检查服务器 {name}");
+                    
+                    var pidProcess = Process.GetProcessById((int)pid);
+                    // 进程存在，视为运行中
+                    Debug.WriteLine($"服务器 {name} 的PID {pid} 存在，确认运行中");
+                    
+                    // 更新进程引用
+                    if (!_serverProcesses.ContainsKey(name))
+                    {
+                        _serverProcesses[name] = pidProcess;
+                        Debug.WriteLine($"已更新服务器 {name} 的进程引用");
+                    }
+                    
+                    // 更新状态
+                    if (!definition.IsRunning)
+                    {
+                        definition.IsRunning = true;
+                        Debug.WriteLine($"更新服务器 {name} 的状态为运行中");
+                    }
+                    
                     return true;
                 }
                 catch (ArgumentException)
                 {
-                    // 进程不存在
+                    Debug.WriteLine($"服务器 {name} 的PID {definition.ProcessId} 不存在");
+                    // 进程不存在，清除无效的进程ID
+                    definition.ProcessId = null;
+                    definition.IsRunning = false;
                     return false;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"通过PID检查出错: {ex.Message}");
+                }
+            }
+            else
+            {
+                Debug.WriteLine($"服务器 {name} 无有效PID记录");
+            }
+
+            // 特殊处理：如果是文件系统服务器，尝试通过进程名查找
+            if (name.Equals("filesystem", StringComparison.OrdinalIgnoreCase) ||
+                Helpers.FileSystemToolAdapter.IsFileSystemServer(name))
+            {
+                if (!string.IsNullOrEmpty(definition.Command))
+                {
+                    Debug.WriteLine($"尝试通过命令名检查文件系统服务器: {definition.Command}");
+                    bool isExternalRunning = IsExternalProcessRunning(definition.Command, definition.Args);
+                    
+                    if (isExternalRunning)
+                    {
+                        Debug.WriteLine($"发现外部运行的文件系统服务进程");
+                        definition.IsRunning = true;
+                        return true;
+                    }
                 }
             }
 
-            // 如果没有有效的PID，则该服务未被此应用实例运行
+            // 如果到这里还未确认运行，则服务未运行
+            Debug.WriteLine($"服务器 {name} 确认未运行");
             return false;
         }
 
@@ -390,6 +622,9 @@ namespace Lyxie_desktop.Services
             {
                 if (process == null) return;
 
+                _serverProcesses.TryRemove(name, out _);
+                _responseBuffers.TryRemove(name, out _);
+
                 if (_serverDefinitions.TryGetValue(name, out var definition))
                 {
                     // 仅当退出的进程ID与记录的ID匹配时才更新状态
@@ -416,6 +651,28 @@ namespace Lyxie_desktop.Services
             if (data != null)
             {
                 Debug.WriteLine($"[MCP-{serverName}-STDOUT] {data}");
+                
+                // 尝试解析为JSON响应
+                if (data.TrimStart().StartsWith("{") && data.TrimEnd().EndsWith("}"))
+                {
+                    ProcessJsonResponse(data);
+                }
+                else
+                {
+                    // 如果不是完整的JSON，尝试缓冲并处理
+                    if (_responseBuffers.TryGetValue(serverName, out var buffer))
+                    {
+                        buffer.AppendLine(data);
+                        
+                        // 检查是否已形成完整的JSON响应
+                        var bufferContent = buffer.ToString();
+                        if (bufferContent.TrimStart().StartsWith("{") && bufferContent.TrimEnd().EndsWith("}"))
+                        {
+                            ProcessJsonResponse(bufferContent);
+                            buffer.Clear();
+                        }
+                    }
+                }
             }
         }
 
@@ -442,12 +699,23 @@ namespace Lyxie_desktop.Services
 
             try
             {
+                // 终止所有未完成的请求
+                foreach (var request in _pendingRequests)
+                {
+                    request.Value.TrySetCanceled();
+                }
+                _pendingRequests.Clear();
+                
+                // 停止并清理所有进程
                 var serverNames = _serverDefinitions.Keys.ToList();
                 foreach (var name in serverNames)
                 {
                     StopServerAsync(name).Wait(TimeSpan.FromSeconds(2));
                 }
+                
                 _serverDefinitions.Clear();
+                _serverProcesses.Clear();
+                _responseBuffers.Clear();
                 
                 _jobObjectManager?.Dispose();
             }

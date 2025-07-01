@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Lyxie_desktop.Views;
+using Lyxie_desktop.Models;
 
 namespace Lyxie_desktop.Interfaces;
 
@@ -17,6 +19,13 @@ public delegate void StreamingDataCallback(string content, bool isComplete);
 /// </summary>
 /// <param name="error">错误信息</param>
 public delegate void StreamingErrorCallback(string error);
+
+/// <summary>
+/// LLM响应回调委托（支持工具调用）
+/// </summary>
+/// <param name="response">LLM响应对象</param>
+/// <param name="isComplete">是否为完整响应结束</param>
+public delegate void LlmResponseCallback(LlmResponse response, bool isComplete);
 
 public interface ILlmApiService : IDisposable
 {
@@ -39,5 +48,68 @@ public interface ILlmApiService : IDisposable
         string message,
         StreamingDataCallback onDataReceived,
         StreamingErrorCallback? onError = null,
+        CancellationToken cancellationToken = default);
+        
+    /// <summary>
+    /// 发送流式消息请求（支持工具调用上下文）
+    /// </summary>
+    Task<bool> SendStreamingMessageAsync(
+        LlmApiConfig config,
+        string message,
+        string? toolContext,
+        StreamingDataCallback onDataReceived,
+        StreamingErrorCallback? onError = null,
+        CancellationToken cancellationToken = default);
+        
+    /// <summary>
+    /// 发送流式消息请求（支持工具定义和工具调用结果）
+    /// </summary>
+    /// <param name="config">LLM API配置</param>
+    /// <param name="message">用户消息</param>
+    /// <param name="availableTools">可用的工具定义列表</param>
+    /// <param name="toolResults">工具调用结果文本</param>
+    /// <param name="onDataReceived">数据接收回调</param>
+    /// <param name="onError">错误回调</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>是否成功启动流式请求</returns>
+    Task<bool> SendStreamingMessageAsync(
+        LlmApiConfig config,
+        string message,
+        List<McpTool>? availableTools,
+        string? toolResults,
+        StreamingDataCallback onDataReceived,
+        StreamingErrorCallback? onError = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 发送对话消息请求（支持完整的函数调用模式）
+    /// </summary>
+    /// <param name="config">LLM API配置</param>
+    /// <param name="messages">对话消息历史</param>
+    /// <param name="availableTools">可用的工具定义列表</param>
+    /// <param name="onLlmResponse">LLM响应回调</param>
+    /// <param name="onError">错误回调</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>是否成功启动请求</returns>
+    Task<bool> SendConversationAsync(
+        LlmApiConfig config,
+        List<ConversationMessage> messages,
+        List<McpTool>? availableTools,
+        LlmResponseCallback onLlmResponse,
+        StreamingErrorCallback? onError = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 发送非流式对话消息请求（获取完整响应）
+    /// </summary>
+    /// <param name="config">LLM API配置</param>
+    /// <param name="messages">对话消息历史</param>
+    /// <param name="availableTools">可用的工具定义列表</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>LLM完整响应</returns>
+    Task<LlmResponse?> SendConversationAndGetResponseAsync(
+        LlmApiConfig config,
+        List<ConversationMessage> messages,
+        List<McpTool>? availableTools,
         CancellationToken cancellationToken = default);
 } 

@@ -41,49 +41,117 @@ namespace Lyxie_desktop.Services
             {
                 if (DateTime.Now - _lastCacheUpdate < _cacheExpiry && _toolsCache.Count > 0)
                 {
+                    Debug.WriteLine($"使用缓存中的工具，数量：{_toolsCache.Values.SelectMany(tools => tools).Count()}");
                     return _toolsCache.Values.SelectMany(tools => tools).ToList();
                 }
             }
 
             var allTools = new List<McpTool>();
             var configs = await _mcpService.GetConfigsAsync();
+            
+            Debug.WriteLine($"开始获取可用工具，配置数量：{configs.Count}");
 
             // 获取所有启用且可用的服务器
             var enabledServers = configs.Where(kvp => 
-                kvp.Value.IsEnabled && 
-                kvp.Value.IsAvailable && 
-                _serverManager.IsServerRunning(kvp.Key)).ToList();
-
-            // 并行获取每个服务器的工具
-            var tasks = enabledServers.Select(async server =>
+                kvp.Value.IsEnabled).ToList();
+            
+            Debug.WriteLine($"找到 {enabledServers.Count} 个启用的服务器");
+            
+            // 特别检查filesystem服务器
+            var filesystemServer = enabledServers.FirstOrDefault(s => 
+                Helpers.FileSystemToolAdapter.IsFileSystemServer(s.Key));
+            
+            if (filesystemServer.Key != null)
             {
+                Debug.WriteLine($"找到文件系统服务器: {filesystemServer.Key}, 启用状态: {filesystemServer.Value.IsEnabled}");
+                
+                // 直接使用预定义的文件系统工具
                 try
                 {
-                    var tools = await GetServerToolsAsync(server.Key, cancellationToken);
-                    return new { ServerName = server.Key, Tools = tools };
+                    var filesystemTools = Helpers.FileSystemToolAdapter.GetFileSystemTools(filesystemServer.Key);
+                    allTools.AddRange(filesystemTools);
+                    
+                    // 更新缓存
+                    lock (_cacheLock)
+                    {
+                        _toolsCache[filesystemServer.Key] = filesystemTools;
+                        _lastCacheUpdate = DateTime.Now;
+                    }
+                    
+                    Debug.WriteLine($"已添加 {filesystemTools.Count} 个文件系统工具");
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"获取服务器 {server.Key} 的工具列表失败: {ex.Message}");
-                    return new { ServerName = server.Key, Tools = new List<McpTool>() };
+                    Debug.WriteLine($"获取文件系统工具异常: {ex.Message}");
                 }
-            });
-
-            var results = await Task.WhenAll(tasks);
-
-            // 更新缓存并收集所有工具
-            lock (_cacheLock)
+            }
+            else
             {
-                _toolsCache.Clear();
-                foreach (var result in results)
-                {
-                    _toolsCache[result.ServerName] = result.Tools;
-                    allTools.AddRange(result.Tools);
-                }
-                _lastCacheUpdate = DateTime.Now;
+                Debug.WriteLine("未找到启用的文件系统服务器");
             }
 
-            Debug.WriteLine($"获取到 {allTools.Count} 个可用工具，来自 {enabledServers.Count} 个服务器");
+            // 并行获取每个其他服务器的工具
+            var otherServers = enabledServers.Where(s => !Helpers.FileSystemToolAdapter.IsFileSystemServer(s.Key)).ToList();
+            
+            if (otherServers.Count > 0)
+            {
+                Debug.WriteLine($"尝试获取其他 {otherServers.Count} 个服务器的工具");
+                
+                var tasks = otherServers.Select(async server =>
+                {
+                    try
+                    {
+                        if (_serverManager.IsServerRunning(server.Key))
+                        {
+                            var tools = await GetServerToolsAsync(server.Key, cancellationToken);
+                            return new { ServerName = server.Key, Tools = tools };
+                        }
+                        else
+                        {
+                            Debug.WriteLine($"服务器 {server.Key} 未运行");
+                            return new { ServerName = server.Key, Tools = new List<McpTool>() };
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"获取服务器 {server.Key} 的工具列表失败: {ex.Message}");
+                        return new { ServerName = server.Key, Tools = new List<McpTool>() };
+                    }
+                });
+
+                var results = await Task.WhenAll(tasks);
+
+                // 更新缓存并收集所有工具
+                lock (_cacheLock)
+                {
+                    foreach (var result in results)
+                    {
+                        if (result.Tools.Count > 0)
+                        {
+                            _toolsCache[result.ServerName] = result.Tools;
+                            allTools.AddRange(result.Tools);
+                            Debug.WriteLine($"从服务器 {result.ServerName} 获取到 {result.Tools.Count} 个工具");
+                        }
+                    }
+                }
+            }
+
+            // 确保至少返回文件系统工具（如果有）
+            if (allTools.Count == 0 && filesystemServer.Key != null)
+            {
+                Debug.WriteLine("未获取到任何工具，尝试再次获取文件系统工具");
+                var filesystemTools = Helpers.FileSystemToolAdapter.GetFileSystemTools(filesystemServer.Key);
+                allTools.AddRange(filesystemTools);
+                
+                // 更新缓存
+                lock (_cacheLock)
+                {
+                    _toolsCache[filesystemServer.Key] = filesystemTools;
+                    _lastCacheUpdate = DateTime.Now;
+                }
+            }
+
+            Debug.WriteLine($"获取到总共 {allTools.Count} 个可用工具，来自 {_toolsCache.Count} 个服务器");
             return allTools;
         }
 
@@ -94,6 +162,20 @@ namespace Lyxie_desktop.Services
         {
             try
             {
+                // 对于文件系统服务器，使用预定义的工具列表
+                if (Helpers.FileSystemToolAdapter.IsFileSystemServer(serverName))
+                {
+                    Debug.WriteLine($"使用预定义的文件系统工具列表，服务器: {serverName}");
+                    return Helpers.FileSystemToolAdapter.GetFileSystemTools(serverName);
+                }
+            
+                // 检查服务器是否在运行
+                if (!_serverManager.IsServerRunning(serverName))
+                {
+                    Debug.WriteLine($"服务器 {serverName} 未运行，无法获取工具列表");
+                    return new List<McpTool>();
+                }
+            
                 // 构建 tools/list 请求
                 var requestId = Guid.NewGuid().ToString();
                 var listRequest = new
@@ -104,6 +186,7 @@ namespace Lyxie_desktop.Services
                     @params = new { }
                 };
 
+                Debug.WriteLine($"向服务器 {serverName} 发送工具列表请求...");
                 var jsonRequest = JsonConvert.SerializeObject(listRequest);
                 var response = await _serverManager.SendRequestAndReadResponseAsync(serverName, jsonRequest, cancellationToken);
 
@@ -113,32 +196,153 @@ namespace Lyxie_desktop.Services
                     return new List<McpTool>();
                 }
 
+                Debug.WriteLine($"收到服务器 {serverName} 的响应: {response.Substring(0, Math.Min(100, response.Length))}...");
+
                 // 解析响应
                 var mcpResponse = JsonConvert.DeserializeObject<dynamic>(response);
                 if (mcpResponse?.result != null)
                 {
-                    var resultJson = JsonConvert.SerializeObject(mcpResponse.result);
-                    var toolsResponse = JsonConvert.DeserializeObject<McpToolsListResponse>(resultJson);
-                    
-                    if (toolsResponse?.Tools != null)
+                    // 尝试多种可能的响应格式
+                    try
                     {
-                        // 设置工具的服务器名称
-                        foreach (var tool in toolsResponse.Tools)
+                        var resultJson = JsonConvert.SerializeObject(mcpResponse.result);
+                        
+                        // 首先尝试直接解析标准格式
+                        var toolsResponse = JsonConvert.DeserializeObject<McpToolsListResponse>(resultJson);
+                        if (toolsResponse?.Tools != null && toolsResponse.Tools.Count > 0)
                         {
-                            tool.ServerName = serverName;
+                            // 设置工具的服务器名称
+                            foreach (var tool in toolsResponse.Tools)
+                            {
+                                tool.ServerName = serverName;
+                            }
+                            
+                            Debug.WriteLine($"服务器 {serverName} 提供了 {toolsResponse.Tools.Count} 个工具（标准格式）");
+                            return toolsResponse.Tools;
                         }
                         
-                        Debug.WriteLine($"服务器 {serverName} 提供了 {toolsResponse.Tools.Count} 个工具");
-                        return toolsResponse.Tools;
+                        // 检查是否为结构中嵌套的tools对象
+                        var resultObj = JsonConvert.DeserializeObject<Dictionary<string, object>>(resultJson);
+                        if (resultObj != null && resultObj.ContainsKey("tools"))
+                        {
+                            var toolsJson = JsonConvert.SerializeObject(resultObj["tools"]);
+                            var tools = JsonConvert.DeserializeObject<List<McpTool>>(toolsJson);
+                            
+                            if (tools != null)
+                            {
+                                foreach (var tool in tools)
+                                {
+                                    tool.ServerName = serverName;
+                                }
+                                
+                                Debug.WriteLine($"服务器 {serverName} 提供了 {tools.Count} 个工具（嵌套格式）");
+                                return tools;
+                            }
+                        }
+                        
+                        // 最后尝试解析工具映射格式
+                        if (resultObj != null && resultObj.ContainsKey("capabilities"))
+                        {
+                            var capsJson = JsonConvert.SerializeObject(resultObj["capabilities"]);
+                            var caps = JsonConvert.DeserializeObject<Dictionary<string, object>>(capsJson);
+                            
+                            if (caps != null && caps.ContainsKey("tools"))
+                            {
+                                var toolsObj = caps["tools"];
+                                var toolsJson = JsonConvert.SerializeObject(toolsObj);
+                                
+                                // 尝试解析为工具字典
+                                var toolsDict = JsonConvert.DeserializeObject<Dictionary<string, object>>(toolsJson);
+                                if (toolsDict != null && toolsDict.Count > 0)
+                                {
+                                    var tools = new List<McpTool>();
+                                    
+                                    foreach (var kvp in toolsDict)
+                                    {
+                                        try
+                                        {
+                                            var toolJson = JsonConvert.SerializeObject(kvp.Value);
+                                            var tool = JsonConvert.DeserializeObject<McpTool>(toolJson);
+                                            
+                                            if (tool != null)
+                                            {
+                                                tool.Name = kvp.Key; // 使用键作为工具名称
+                                                tool.ServerName = serverName;
+                                                tools.Add(tool);
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            Debug.WriteLine($"解析工具 {kvp.Key} 失败: {ex.Message}");
+                                        }
+                                    }
+                                    
+                                    if (tools.Count > 0)
+                                    {
+                                        Debug.WriteLine($"服务器 {serverName} 提供了 {tools.Count} 个工具（字典格式）");
+                                        return tools;
+                                    }
+                                }
+                                else
+                                {
+                                    Debug.WriteLine($"服务器 {serverName} 返回了空的tools对象");
+                                    
+                                    // 如果tools对象为空或无法解析，但属于filesystem服务器，使用预定义的工具
+                                    if (Helpers.FileSystemToolAdapter.IsFileSystemServer(serverName))
+                                    {
+                                        Debug.WriteLine($"tools对象为空，使用预定义的文件系统工具列表，服务器: {serverName}");
+                                        return Helpers.FileSystemToolAdapter.GetFileSystemTools(serverName);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                Debug.WriteLine($"服务器 {serverName} 的capabilities不包含tools键");
+                            }
+                        }
+                        else
+                        {
+                            Debug.WriteLine($"服务器 {serverName} 的响应不包含标准格式的工具列表或capabilities");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"解析工具列表异常: {ex.Message}");
+                        
+                        // 发生异常时，如果是文件系统服务器，使用预定义的工具列表
+                        if (Helpers.FileSystemToolAdapter.IsFileSystemServer(serverName))
+                        {
+                            Debug.WriteLine($"解析异常，使用预定义的文件系统工具列表，服务器: {serverName}");
+                            return Helpers.FileSystemToolAdapter.GetFileSystemTools(serverName);
+                        }
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine($"服务器 {serverName} 的响应中不包含result对象");
+                    
+                    // 如果是文件系统服务器，无论是否成功解析响应，都返回预定义的工具列表
+                    if (Helpers.FileSystemToolAdapter.IsFileSystemServer(serverName))
+                    {
+                        Debug.WriteLine($"无有效result，使用预定义的文件系统工具列表，服务器: {serverName}");
+                        return Helpers.FileSystemToolAdapter.GetFileSystemTools(serverName);
                     }
                 }
 
-                Debug.WriteLine($"服务器 {serverName} 的工具列表响应格式不正确");
+                Debug.WriteLine($"服务器 {serverName} 的工具列表响应格式不正确或为空");
                 return new List<McpTool>();
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"获取服务器 {serverName} 工具列表异常: {ex.Message}");
+                
+                // 发生异常时，如果是文件系统服务器，使用预定义的工具列表
+                if (Helpers.FileSystemToolAdapter.IsFileSystemServer(serverName))
+                {
+                    Debug.WriteLine($"异常情况下使用预定义的文件系统工具列表，服务器: {serverName}");
+                    return Helpers.FileSystemToolAdapter.GetFileSystemTools(serverName);
+                }
+                
                 return new List<McpTool>();
             }
         }
@@ -513,10 +717,12 @@ namespace Lyxie_desktop.Services
         public async Task<McpToolContext> GenerateToolContextAsync(string userMessage, CancellationToken cancellationToken = default)
         {
             var context = new McpToolContext();
+            Debug.WriteLine($"开始为消息生成工具调用上下文: {userMessage.Substring(0, Math.Min(50, userMessage.Length))}...");
 
             try
             {
                 // 获取所有可用工具
+                Debug.WriteLine("获取可用工具列表...");
                 context.AvailableTools = await GetAvailableToolsAsync(cancellationToken);
                 
                 if (context.AvailableTools.Count == 0)
@@ -525,6 +731,8 @@ namespace Lyxie_desktop.Services
                     return context;
                 }
 
+                Debug.WriteLine($"获取到 {context.AvailableTools.Count} 个可用工具，准备匹配相关工具...");
+                
                 // 匹配相关工具
                 var relevantTools = MatchRelevantTools(userMessage, context.AvailableTools);
                 
@@ -534,14 +742,19 @@ namespace Lyxie_desktop.Services
                     return context;
                 }
 
-                // 为相关工具创建调用请求（这里简化处理，实际应用中可能需要更复杂的参数推断）
+                Debug.WriteLine($"匹配到 {relevantTools.Count} 个相关工具: {string.Join(", ", relevantTools.Select(t => t.Name))}");
+                
+                // 为相关工具创建调用请求
                 foreach (var tool in relevantTools)
                 {
+                    var parameters = GenerateToolParameters(tool, userMessage);
+                    Debug.WriteLine($"为工具 {tool.Name} 生成参数: {(parameters != null ? JsonConvert.SerializeObject(parameters) : "null")}");
+                    
                     var toolCall = new McpToolCall
                     {
                         ServerName = tool.ServerName,
                         ToolName = tool.Name,
-                        Parameters = GenerateToolParameters(tool, userMessage)
+                        Parameters = parameters
                     };
                     context.PendingCalls.Add(toolCall);
                 }
@@ -551,6 +764,19 @@ namespace Lyxie_desktop.Services
                 {
                     Debug.WriteLine($"准备调用 {context.PendingCalls.Count} 个相关工具");
                     context.Results = await CallToolsAsync(context.PendingCalls, cancellationToken);
+                    
+                    Debug.WriteLine($"工具调用完成，获得 {context.Results.Count} 个结果");
+                    foreach (var result in context.Results)
+                    {
+                        if (result.IsSuccess)
+                        {
+                            Debug.WriteLine($"工具 {context.PendingCalls.FirstOrDefault(c => c.Id == result.CallId)?.ToolName} 调用成功，内容长度: {(result.Content?.Length ?? 0)}");
+                        }
+                        else
+                        {
+                            Debug.WriteLine($"工具 {context.PendingCalls.FirstOrDefault(c => c.Id == result.CallId)?.ToolName} 调用失败: {result.ErrorMessage}");
+                        }
+                    }
                 }
 
                 return context;
@@ -558,32 +784,190 @@ namespace Lyxie_desktop.Services
             catch (Exception ex)
             {
                 Debug.WriteLine($"生成工具调用上下文异常: {ex.Message}");
+                Debug.WriteLine($"异常详情: {ex}");
                 return context;
             }
         }
 
         /// <summary>
-        /// 为工具生成参数（简化实现）
+        /// 为工具生成参数
         /// </summary>
         private Dictionary<string, object>? GenerateToolParameters(McpTool tool, string userMessage)
         {
-            // 这里是简化的参数生成逻辑
-            // 实际应用中可能需要更复杂的自然语言处理来提取参数
             var parameters = new Dictionary<string, object>();
+            var messageLower = userMessage.ToLowerInvariant();
 
-            // 如果工具需要查询参数，使用用户消息作为查询
-            if (tool.InputSchema?.Properties != null && tool.InputSchema.Properties.ContainsKey("query"))
+            // 如果是文件系统工具，进行专门处理
+            if (tool.ServerName.ToLower().Contains("filesystem") || 
+                tool.ServerName.ToLower().Contains("file"))
             {
-                parameters["query"] = userMessage;
+                // 根据工具名称和用户消息生成参数
+                switch (tool.Name.ToLower())
+                {
+                    case "list_directory":
+                        // 尝试从用户消息中提取路径
+                        string? dirPath = ExtractPathFromMessage(messageLower);
+                        if (!string.IsNullOrEmpty(dirPath))
+                        {
+                            parameters["path"] = dirPath;
+                        }
+                        else
+                        {
+                            // 默认使用当前路径
+                            parameters["path"] = ".";
+                        }
+                        return parameters;
+
+                    case "read_file":
+                        string? filePath = ExtractPathFromMessage(messageLower);
+                        if (!string.IsNullOrEmpty(filePath))
+                        {
+                            parameters["path"] = filePath;
+                            return parameters;
+                        }
+                        break;
+
+                    case "get_current_directory":
+                        // 不需要参数
+                        return parameters;
+
+                    case "path_exists":
+                        string? pathToCheck = ExtractPathFromMessage(messageLower);
+                        if (!string.IsNullOrEmpty(pathToCheck))
+                        {
+                            parameters["path"] = pathToCheck;
+                            return parameters;
+                        }
+                        break;
+
+                    case "get_file_info":
+                        string? fileInfoPath = ExtractPathFromMessage(messageLower);
+                        if (!string.IsNullOrEmpty(fileInfoPath))
+                        {
+                            parameters["path"] = fileInfoPath;
+                            return parameters;
+                        }
+                        break;
+                }
             }
 
-            // 如果工具需要文本参数，使用用户消息
-            if (tool.InputSchema?.Properties != null && tool.InputSchema.Properties.ContainsKey("text"))
+            // 通用参数处理逻辑
+            if (tool.InputSchema?.Properties != null)
             {
-                parameters["text"] = userMessage;
+                // 如果工具需要查询参数，使用用户消息作为查询
+                if (tool.InputSchema.Properties.ContainsKey("query"))
+                {
+                    parameters["query"] = userMessage;
+                }
+
+                // 如果工具需要文本参数，使用用户消息
+                if (tool.InputSchema.Properties.ContainsKey("text"))
+                {
+                    parameters["text"] = userMessage;
+                }
+
+                // 如果工具需要路径参数但未设置，尝试提取
+                if (tool.InputSchema.Properties.ContainsKey("path") && !parameters.ContainsKey("path"))
+                {
+                    string? path = ExtractPathFromMessage(messageLower);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        parameters["path"] = path;
+                    }
+                    else
+                    {
+                        // 默认使用当前路径
+                        parameters["path"] = ".";
+                    }
+                }
             }
 
             return parameters.Count > 0 ? parameters : null;
+        }
+
+        /// <summary>
+        /// 从用户消息中提取路径
+        /// </summary>
+        private string? ExtractPathFromMessage(string message)
+        {
+            // 常见的路径引导词
+            string[] pathIndicators = {
+                "查看", "路径", "目录", "文件夹", "文件", 
+                "path", "directory", "folder", "file", 
+                "查询", "读取", "check", "read", "list"
+            };
+            
+            // 拆分消息为单词
+            var words = message.Split(new char[] { ' ', ':', '，', ',', '。', '？', '?', '\n', '\r', '\t' }, 
+                                        StringSplitOptions.RemoveEmptyEntries);
+            
+            // 查找路径指示词后面的可能路径
+            for (int i = 0; i < words.Length - 1; i++)
+            {
+                foreach (var indicator in pathIndicators)
+                {
+                    if (words[i].Contains(indicator))
+                    {
+                        // 检查下一个单词是否可能是路径
+                        string potentialPath = words[i + 1];
+                        
+                        // 如果是引号包裹的路径
+                        if (potentialPath.StartsWith("\"") && potentialPath.EndsWith("\""))
+                        {
+                            return potentialPath.Trim('"');
+                        }
+                        
+                        // 如果是单引号包裹的路径
+                        if (potentialPath.StartsWith("'") && potentialPath.EndsWith("'"))
+                        {
+                            return potentialPath.Trim('\'');
+                        }
+                        
+                        // 检查是否是明显的路径格式
+                        if (IsLikelyPath(potentialPath))
+                        {
+                            return potentialPath;
+                        }
+                    }
+                }
+            }
+            
+            // 找不到明确的路径，检查是否有默认路径
+            foreach (var word in words)
+            {
+                if (IsLikelyPath(word))
+                {
+                    return word;
+                }
+            }
+            
+            // 如果消息中提到"当前"，返回当前目录
+            if (message.Contains("当前") || message.Contains("current"))
+            {
+                return ".";
+            }
+            
+            return null;
+        }
+        
+        /// <summary>
+        /// 判断字符串是否可能是路径
+        /// </summary>
+        private bool IsLikelyPath(string text)
+        {
+            // 检查是否包含路径分隔符
+            if (text.Contains("/") || text.Contains("\\"))
+                return true;
+                
+            // 检查是否包含盘符格式 (如 C:)
+            if (text.Length >= 2 && char.IsLetter(text[0]) && text[1] == ':')
+                return true;
+                
+            // 检查是否是相对路径指示符
+            if (text == "." || text == ".." || text.StartsWith("./") || text.StartsWith("../"))
+                return true;
+                
+            return false;
         }
 
         /// <summary>

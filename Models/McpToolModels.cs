@@ -163,4 +163,163 @@ namespace Lyxie_desktop.Models
         [JsonProperty("text")]
         public string? Text { get; set; }
     }
+
+    /// <summary>
+    /// LLM工具调用指令
+    /// </summary>
+    public class LlmToolCall
+    {
+        [JsonProperty("id")]
+        public string Id { get; set; } = string.Empty;
+
+        [JsonProperty("type")]
+        public string Type { get; set; } = "function";
+
+        [JsonProperty("function")]
+        public LlmToolFunction? Function { get; set; }
+    }
+
+    /// <summary>
+    /// LLM工具调用函数信息
+    /// </summary>
+    public class LlmToolFunction
+    {
+        [JsonProperty("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonProperty("arguments")]
+        public string Arguments { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// LLM完整响应
+    /// </summary>
+    public class LlmResponse
+    {
+        /// <summary>
+        /// 文本内容
+        /// </summary>
+        public string Content { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 工具调用列表
+        /// </summary>
+        public List<LlmToolCall> ToolCalls { get; set; } = new();
+
+        /// <summary>
+        /// 是否包含工具调用
+        /// </summary>
+        public bool HasToolCalls => ToolCalls.Count > 0;
+
+        /// <summary>
+        /// 是否为最终响应（不包含工具调用）
+        /// </summary>
+        public bool IsFinalResponse => !HasToolCalls && !string.IsNullOrEmpty(Content);
+    }
+
+    /// <summary>
+    /// 工具调用执行上下文
+    /// </summary>
+    public class ToolCallExecutionContext
+    {
+        /// <summary>
+        /// 用户原始消息
+        /// </summary>
+        public string UserMessage { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 对话历史
+        /// </summary>
+        public List<ConversationMessage> ConversationHistory { get; set; } = new();
+
+        /// <summary>
+        /// 可用工具列表
+        /// </summary>
+        public List<McpTool> AvailableTools { get; set; } = new();
+
+        /// <summary>
+        /// 工具调用执行结果
+        /// </summary>
+        public List<ToolCallExecution> ToolExecutions { get; set; } = new();
+
+        /// <summary>
+        /// 最大递归深度
+        /// </summary>
+        public int MaxRecursionDepth { get; set; } = 5;
+
+        /// <summary>
+        /// 当前递归深度
+        /// </summary>
+        public int CurrentDepth { get; set; } = 0;
+
+        /// <summary>
+        /// 是否已达到最大递归深度
+        /// </summary>
+        public bool HasReachedMaxDepth => CurrentDepth >= MaxRecursionDepth;
+    }
+
+    /// <summary>
+    /// 对话消息
+    /// </summary>
+    public class ConversationMessage
+    {
+        [JsonProperty("role")]
+        public string Role { get; set; } = string.Empty; // user, assistant, tool
+
+        [JsonProperty("content")]
+        public string Content { get; set; } = string.Empty;
+
+        [JsonProperty("tool_call_id")]
+        public string? ToolCallId { get; set; }
+
+        [JsonProperty("tool_calls")]
+        public List<LlmToolCall>? ToolCalls { get; set; }
+    }
+
+    /// <summary>
+    /// 工具调用执行记录
+    /// </summary>
+    public class ToolCallExecution
+    {
+        /// <summary>
+        /// LLM工具调用指令
+        /// </summary>
+        public LlmToolCall LlmToolCall { get; set; } = new();
+
+        /// <summary>
+        /// MCP工具调用结果
+        /// </summary>
+        public McpToolResult? McpResult { get; set; }
+
+        /// <summary>
+        /// 执行开始时间
+        /// </summary>
+        public DateTime StartTime { get; set; } = DateTime.Now;
+
+        /// <summary>
+        /// 执行结束时间
+        /// </summary>
+        public DateTime? EndTime { get; set; }
+
+        /// <summary>
+        /// 执行状态
+        /// </summary>
+        public ToolExecutionStatus Status { get; set; } = ToolExecutionStatus.Pending;
+
+        /// <summary>
+        /// 错误信息
+        /// </summary>
+        public string? ErrorMessage { get; set; }
+    }
+
+    /// <summary>
+    /// 工具执行状态
+    /// </summary>
+    public enum ToolExecutionStatus
+    {
+        Pending,
+        Executing,
+        Completed,
+        Failed
+    }
 } 

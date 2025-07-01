@@ -88,6 +88,13 @@ namespace Lyxie_desktop.Interfaces
         /// </summary>
         /// <returns>正在运行的服务器名称列表</returns>
         IEnumerable<string> GetRunningServers();
+        
+        /// <summary>
+        /// 检查指定服务器是否正在运行
+        /// </summary>
+        /// <param name="name">服务器名称</param>
+        /// <returns>是否正在运行</returns>
+        bool IsServerRunning(string name);
 
         /// <summary>
         /// 获取自动验证服务实例
