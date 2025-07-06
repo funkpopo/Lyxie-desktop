@@ -49,12 +49,15 @@ namespace Lyxie_desktop.Services
             if (string.IsNullOrEmpty(name) || definition == null)
                 return false;
 
+            Debug.WriteLine($"开始启动MCP服务器: {name}");
+
             // 更新服务器定义
             _serverDefinitions.AddOrUpdate(name, definition, (key, oldValue) => definition);
 
             // HTTP服务器不需要启动进程
             if (definition.IsHttpServer)
             {
+                Debug.WriteLine($"服务器 {name} 是HTTP服务器，直接标记为运行中");
                 definition.IsRunning = true;
                 return true;
             }
@@ -62,20 +65,23 @@ namespace Lyxie_desktop.Services
             // 检查是否已经在运行
             if (IsServerRunning(name))
             {
+                Debug.WriteLine($"服务器 {name} 已经在运行中");
                 definition.IsRunning = true;
                 return true;
             }
 
             try
             {
+                Debug.WriteLine($"准备启动服务器 {name}，命令: {definition.Command}");
+
                 // 在Windows上，我们使用cmd.exe来承载命令，以便可以将其添加到Job Object中
                 // 这样可以确保即使是像npx这样的批处理文件也能正确执行
                 string shellExecutable = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh"; // 为非Windows系统提供一个备用
                 string shellArgsPrefix = OperatingSystem.IsWindows() ? "/c " : "-c ";
-                
+
                 // 构建完整命令
                 string fullCommand = definition.Command!;
-                
+
                 // 添加参数
                 if (definition.Args != null && definition.Args.Count > 0)
                 {
@@ -83,7 +89,9 @@ namespace Lyxie_desktop.Services
                     var processedArgs = definition.Args.Select(arg => arg.Contains(" ") ? $"\"{arg}\"" : arg);
                     fullCommand += " " + string.Join(" ", processedArgs);
                 }
-                
+
+                Debug.WriteLine($"完整命令: {shellExecutable} {shellArgsPrefix}{fullCommand}");
+
                 // 构建ProcessStartInfo
                 var processStartInfo = new ProcessStartInfo
                 {
@@ -97,7 +105,7 @@ namespace Lyxie_desktop.Services
                 };
 
                 var process = new Process { StartInfo = processStartInfo };
-                
+
                 process.EnableRaisingEvents = true;
                 process.Exited += (sender, e) => OnProcessExited(name, (Process)sender!);
 
@@ -107,36 +115,87 @@ namespace Lyxie_desktop.Services
                 // 异步读取输出
                 process.OutputDataReceived += (sender, args) => HandleOutput(name, args.Data);
                 process.ErrorDataReceived += (sender, args) => HandleError(name, args.Data);
-                
+
+                Debug.WriteLine($"尝试启动进程...");
                 if (process.Start())
                 {
-                    // 添加到进程字典
-                    _serverProcesses.TryAdd(name, process);
-                    
-                    // 在Windows上，将进程添加到Job Object
-                    _jobObjectManager?.AddProcess(process);
+                    Debug.WriteLine($"进程启动成功，PID: {process.Id}");
 
-                    process.BeginOutputReadLine();
-                    process.BeginErrorReadLine();
-                    
+                    // 立即更新状态信息
                     definition.IsRunning = true;
                     definition.ProcessId = process.Id;
-                    
-                    await Task.Delay(500, cancellationToken);
-                    
-                    if (!process.HasExited)
+                    definition.ErrorMessage = null; // 清除之前的错误信息
+
+                    // 添加到进程字典
+                    bool addedToDict = _serverProcesses.TryAdd(name, process);
+                    Debug.WriteLine($"进程添加到字典: {addedToDict}");
+
+                    // 在Windows上，将进程添加到Job Object
+                    try
                     {
+                        _jobObjectManager?.AddProcess(process);
+                        Debug.WriteLine($"进程已添加到Job Object");
+                    }
+                    catch (Exception jobEx)
+                    {
+                        Debug.WriteLine($"添加到Job Object失败: {jobEx.Message}");
+                    }
+
+                    // 开始异步读取输出
+                    try
+                    {
+                        process.BeginOutputReadLine();
+                        process.BeginErrorReadLine();
+                        Debug.WriteLine($"开始异步读取进程输出");
+                    }
+                    catch (Exception ioEx)
+                    {
+                        Debug.WriteLine($"开始读取输出失败: {ioEx.Message}");
+                    }
+
+                    Debug.WriteLine($"等待500ms确认进程稳定...");
+                    await Task.Delay(500, cancellationToken);
+
+                    // 再次检查进程状态
+                    try
+                    {
+                        if (!process.HasExited)
+                        {
+                            Debug.WriteLine($"=== 服务器 {name} 启动成功并稳定运行，PID: {process.Id} ===");
+
+                            // 最终确认状态同步
+                            if (!definition.IsRunning)
+                            {
+                                definition.IsRunning = true;
+                                Debug.WriteLine($"最终状态同步: 确保服务器 {name} 标记为运行中");
+                            }
+
+                            return true;
+                        }
+                        else
+                        {
+                            Debug.WriteLine($"服务器 {name} 进程在启动后退出，ExitCode: {process.ExitCode}");
+                            OnProcessExited(name, process);
+                            return false;
+                        }
+                    }
+                    catch (Exception checkEx)
+                    {
+                        Debug.WriteLine($"检查进程状态时出错: {checkEx.Message}");
+                        // 假设进程仍在运行
+                        Debug.WriteLine($"假设服务器 {name} 仍在运行");
                         return true;
                     }
-                    else
-                    {
-                        OnProcessExited(name, process);
-                        return false;
-                    }
+                }
+                else
+                {
+                    Debug.WriteLine($"进程启动失败 - Process.Start() 返回false");
+                    definition.ErrorMessage = "进程启动失败";
                 }
             }
             catch (Exception ex)
             {
+                Debug.WriteLine($"启动服务器 {name} 时发生异常: {ex.Message}");
                 definition.IsRunning = false;
                 definition.ProcessId = null;
                 definition.ErrorMessage = $"启动失败: {ex.Message}";
@@ -384,9 +443,12 @@ namespace Lyxie_desktop.Services
         public bool IsServerRunning(string name)
         {
             if (string.IsNullOrEmpty(name))
+            {
+                Debug.WriteLine($"服务器名称为空，返回false");
                 return false;
+            }
 
-            Debug.WriteLine($"检查服务器 {name} 是否运行中...");
+            Debug.WriteLine($"=== 开始检查服务器 {name} 是否运行中 ===");
 
             if (!_serverDefinitions.TryGetValue(name, out var definition))
             {
@@ -394,109 +456,130 @@ namespace Lyxie_desktop.Services
                 return false;
             }
 
+            Debug.WriteLine($"服务器 {name} 定义状态: IsRunning={definition.IsRunning}, ProcessId={definition.ProcessId}");
+
             // HTTP服务器特殊处理
             if (definition.IsHttpServer)
             {
                 Debug.WriteLine($"服务器 {name} 是HTTP服务器，状态: {definition.IsRunning}");
                 return definition.IsRunning;
             }
-            
-            // 首先检查我们保存的进程引用
+
+            // 方法1：检查我们保存的进程引用
             if (_serverProcesses.TryGetValue(name, out var process))
             {
                 try
                 {
                     bool isRunning = !process.HasExited;
-                    Debug.WriteLine($"服务器 {name} 的进程引用检查结果: {isRunning}");
+                    Debug.WriteLine($"方法1 - 进程引用检查: 服务器 {name} 进程状态={isRunning}, PID={process.Id}");
+
                     if (isRunning)
                     {
                         // 确保定义状态与实际状态同步
                         if (!definition.IsRunning)
                         {
-                            Debug.WriteLine($"更新服务器 {name} 的状态为运行中");
+                            Debug.WriteLine($"同步状态: 更新服务器 {name} 的定义状态为运行中");
                             definition.IsRunning = true;
                             definition.ProcessId = process.Id;
                         }
+                        Debug.WriteLine($"=== 服务器 {name} 通过进程引用确认运行中 ===");
                         return true;
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"进程引用显示已退出，清理进程引用");
+                        _serverProcesses.TryRemove(name, out _);
+                        definition.IsRunning = false;
+                        definition.ProcessId = null;
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"检查进程引用出错: {ex.Message}");
-                    // 进程可能已无效，继续后续检查
+                    Debug.WriteLine($"检查进程引用出错: {ex.Message}，清理无效引用");
+                    _serverProcesses.TryRemove(name, out _);
+                    // 继续后续检查
                 }
             }
             else
             {
-                Debug.WriteLine($"服务器 {name} 无进程引用");
+                Debug.WriteLine($"方法1 - 服务器 {name} 无进程引用记录");
             }
-            
-            // 检查是否有记录的进程ID并且该进程仍在运行
+
+            // 方法2：通过记录的进程ID检查
             if (definition.ProcessId.HasValue && definition.ProcessId > 0)
             {
                 try
                 {
                     var pid = definition.ProcessId.Value;
-                    Debug.WriteLine($"尝试通过PID {pid} 检查服务器 {name}");
-                    
-                    var pidProcess = Process.GetProcessById((int)pid);
-                    // 进程存在，视为运行中
-                    Debug.WriteLine($"服务器 {name} 的PID {pid} 存在，确认运行中");
-                    
+                    Debug.WriteLine($"方法2 - 尝试通过PID {pid} 检查服务器 {name}");
+
+                    var pidProcess = Process.GetProcessById(pid);
+                    Debug.WriteLine($"方法2 - 服务器 {name} 的PID {pid} 存在，进程名: {pidProcess.ProcessName}");
+
                     // 更新进程引用
                     if (!_serverProcesses.ContainsKey(name))
                     {
                         _serverProcesses[name] = pidProcess;
-                        Debug.WriteLine($"已更新服务器 {name} 的进程引用");
+                        Debug.WriteLine($"恢复进程引用: 已更新服务器 {name} 的进程引用");
                     }
-                    
+
                     // 更新状态
                     if (!definition.IsRunning)
                     {
                         definition.IsRunning = true;
-                        Debug.WriteLine($"更新服务器 {name} 的状态为运行中");
+                        Debug.WriteLine($"同步状态: 更新服务器 {name} 的定义状态为运行中");
                     }
-                    
+
+                    Debug.WriteLine($"=== 服务器 {name} 通过PID确认运行中 ===");
                     return true;
                 }
                 catch (ArgumentException)
                 {
-                    Debug.WriteLine($"服务器 {name} 的PID {definition.ProcessId} 不存在");
+                    Debug.WriteLine($"方法2 - 服务器 {name} 的PID {definition.ProcessId} 不存在，清理状态");
                     // 进程不存在，清除无效的进程ID
                     definition.ProcessId = null;
                     definition.IsRunning = false;
-                    return false;
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"通过PID检查出错: {ex.Message}");
+                    Debug.WriteLine($"方法2 - 通过PID检查出错: {ex.Message}");
                 }
             }
             else
             {
-                Debug.WriteLine($"服务器 {name} 无有效PID记录");
+                Debug.WriteLine($"方法2 - 服务器 {name} 无有效PID记录");
             }
 
-            // 特殊处理：如果是文件系统服务器，尝试通过进程名查找
+            // 方法3：特殊处理文件系统服务器，通过进程名查找
             if (name.Equals("filesystem", StringComparison.OrdinalIgnoreCase) ||
                 Helpers.FileSystemToolAdapter.IsFileSystemServer(name))
             {
                 if (!string.IsNullOrEmpty(definition.Command))
                 {
-                    Debug.WriteLine($"尝试通过命令名检查文件系统服务器: {definition.Command}");
+                    Debug.WriteLine($"方法3 - 尝试通过命令名检查文件系统服务器: {definition.Command}");
                     bool isExternalRunning = IsExternalProcessRunning(definition.Command, definition.Args);
-                    
+
                     if (isExternalRunning)
                     {
-                        Debug.WriteLine($"发现外部运行的文件系统服务进程");
+                        Debug.WriteLine($"方法3 - 发现外部运行的文件系统服务进程");
                         definition.IsRunning = true;
+                        Debug.WriteLine($"=== 服务器 {name} 通过外部进程检查确认运行中 ===");
                         return true;
                     }
+                    else
+                    {
+                        Debug.WriteLine($"方法3 - 未发现外部运行的文件系统服务进程");
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine($"方法3 - 文件系统服务器命令为空，跳过外部进程检查");
                 }
             }
 
             // 如果到这里还未确认运行，则服务未运行
-            Debug.WriteLine($"服务器 {name} 确认未运行");
+            Debug.WriteLine($"=== 服务器 {name} 所有检查方法均未确认运行，标记为未运行 ===");
+            definition.IsRunning = false;
             return false;
         }
 
@@ -620,26 +703,55 @@ namespace Lyxie_desktop.Services
         {
             try
             {
-                if (process == null) return;
+                if (process == null)
+                {
+                    Debug.WriteLine($"OnProcessExited: 进程对象为null，服务器: {name}");
+                    return;
+                }
 
-                _serverProcesses.TryRemove(name, out _);
-                _responseBuffers.TryRemove(name, out _);
+                Debug.WriteLine($"=== 进程退出事件: 服务器 {name}, PID: {process.Id}, ExitCode: {process.ExitCode} ===");
+
+                // 清理进程引用和缓冲区
+                bool removedFromDict = _serverProcesses.TryRemove(name, out _);
+                bool removedBuffer = _responseBuffers.TryRemove(name, out _);
+
+                Debug.WriteLine($"清理结果: 进程字典={removedFromDict}, 缓冲区={removedBuffer}");
 
                 if (_serverDefinitions.TryGetValue(name, out var definition))
                 {
+                    Debug.WriteLine($"当前定义状态: IsRunning={definition.IsRunning}, ProcessId={definition.ProcessId}");
+
                     // 仅当退出的进程ID与记录的ID匹配时才更新状态
                     if (definition.ProcessId.HasValue && definition.ProcessId == process.Id)
                     {
+                        Debug.WriteLine($"进程ID匹配，更新服务器 {name} 状态为未运行");
                         definition.IsRunning = false;
                         definition.ProcessId = null;
+                        definition.ErrorMessage = $"进程退出，退出码: {process.ExitCode}";
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"进程ID不匹配，不更新状态。定义PID: {definition.ProcessId}, 退出PID: {process.Id}");
                     }
                 }
+                else
+                {
+                    Debug.WriteLine($"未找到服务器 {name} 的定义");
+                }
 
-                process.Dispose();
+                try
+                {
+                    process.Dispose();
+                    Debug.WriteLine($"进程对象已释放");
+                }
+                catch (Exception disposeEx)
+                {
+                    Debug.WriteLine($"释放进程对象时出错: {disposeEx.Message}");
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // 忽略清理过程中的异常
+                Debug.WriteLine($"处理进程退出事件时出错: {ex.Message}");
             }
         }
 

@@ -80,6 +80,23 @@ namespace Lyxie_desktop.Services
             }
             catch (HttpRequestException ex)
             {
+                // 使用错误处理管理器处理网络错误
+                if (App.ErrorHandlingManager != null)
+                {
+                    try
+                    {
+                        var errorResult = await App.ErrorHandlingManager.HandleErrorAsync(
+                            ex,
+                            "LLM API连接测试",
+                            "llm_api"
+                        );
+                        return (false, errorResult.UserMessage);
+                    }
+                    catch
+                    {
+                        // 如果错误处理器失败，使用默认消息
+                    }
+                }
                 return (false, $"网络请求错误: {ex.Message}");
             }
             catch (TaskCanceledException)
@@ -88,6 +105,23 @@ namespace Lyxie_desktop.Services
             }
             catch (Exception ex)
             {
+                // 使用错误处理管理器处理未知错误
+                if (App.ErrorHandlingManager != null)
+                {
+                    try
+                    {
+                        var errorResult = await App.ErrorHandlingManager.HandleErrorAsync(
+                            ex,
+                            "LLM API连接测试",
+                            "llm_api"
+                        );
+                        return (false, errorResult.UserMessage);
+                    }
+                    catch
+                    {
+                        // 如果错误处理器失败，使用默认消息
+                    }
+                }
                 return (false, $"未知错误: {ex.Message}");
             }
         }
@@ -266,26 +300,31 @@ namespace Lyxie_desktop.Services
                             if (choices != null && choices.Count > 0)
                             {
                                 var firstChoice = choices[0];
-                                var delta = firstChoice["delta"];
+                                var delta = firstChoice["delta"] as JObject;
                                 
-                                if (delta != null && delta["content"] != null)
+                                if (delta != null)
                                 {
-                                    var contentChunk = delta["content"]?.ToString() ?? "";
-                                    if (!string.IsNullOrEmpty(contentChunk))
+                                    // 处理文本内容
+                                    if (delta.ContainsKey("content"))
                                     {
-                                        fullContent.Append(contentChunk);
-                                        onDataReceived.Invoke(contentChunk, false);
+                                        var contentChunk = delta["content"]?.ToString() ?? "";
+                                        if (!string.IsNullOrEmpty(contentChunk))
+                                        {
+                                            fullContent.Append(contentChunk);
+                                            onDataReceived.Invoke(contentChunk, false);
+                                        }
                                     }
-                                }
-                                
-                                // 处理工具调用
-                                var toolCalls = delta["tool_calls"] as JArray;
-                                if (toolCalls != null && toolCalls.Count > 0)
-                                {
-                                    foreach (var toolCall in toolCalls)
+
+                                    // 处理工具调用
+                                    var toolCalls = delta["tool_calls"] as JArray;
+                                    if (toolCalls != null && toolCalls.Count > 0)
                                     {
-                                        // 工具调用不在流式响应中直接处理
-                                        System.Diagnostics.Debug.WriteLine($"检测到工具调用: {toolCall}");
+                                        foreach (var toolCall in toolCalls)
+                                        {
+                                            if (toolCall == null) continue;
+                                            // 工具调用不在流式响应中直接处理
+                                            System.Diagnostics.Debug.WriteLine($"检测到工具调用: {toolCall}");
+                                        }
                                     }
                                 }
                                 
@@ -352,6 +391,8 @@ namespace Lyxie_desktop.Services
                         {
                             foreach (var prop in tool.InputSchema.Properties)
                             {
+                                if (prop.Value == null) continue;
+
                                 var propObj = new Dictionary<string, object>
                                 {
                                     ["type"] = prop.Value.Type
@@ -449,10 +490,10 @@ namespace Lyxie_desktop.Services
                     {
                         id = tc.Id,
                         type = tc.Type,
-                        function = new
+                        function = tc.Function == null ? null : new
                         {
-                            name = tc.Function?.Name,
-                            arguments = tc.Function?.Arguments
+                            name = tc.Function!.Name,
+                            arguments = tc.Function!.Arguments
                         }
                     }).ToArray()
                 }).ToArray();
@@ -463,7 +504,15 @@ namespace Lyxie_desktop.Services
                 if (availableTools != null && availableTools.Count > 0)
                 {
                     var openAITools = ConvertToOpenAIToolFormat(availableTools);
-                    
+
+                    // 使用工具选择优化器确定最佳tool_choice策略
+                    string toolChoice = "auto";
+                    if (App.ToolSelectionOptimizer != null && messages.Count > 0)
+                    {
+                        var userMessage = messages.FirstOrDefault(m => m.Role == "user")?.Content ?? "";
+                        toolChoice = App.ToolSelectionOptimizer.GetOptimalToolChoice(availableTools, userMessage);
+                    }
+
                     requestData = new
                     {
                         model = config.ModelName,
@@ -472,7 +521,7 @@ namespace Lyxie_desktop.Services
                         max_tokens = config.MaxTokens,
                         stream = true,
                         tools = openAITools.ToArray(),
-                        tool_choice = "auto"
+                        tool_choice = toolChoice
                     };
                 }
                 else
@@ -537,12 +586,12 @@ namespace Lyxie_desktop.Services
                         if (choices != null && choices.Count > 0)
                         {
                             var firstChoice = choices[0];
-                            var delta = firstChoice["delta"];
+                            var delta = firstChoice["delta"] as JObject;
                             
                             if (delta != null)
                             {
                                 // 处理文本内容
-                                if (delta["content"] != null)
+                                if (delta.ContainsKey("content"))
                                 {
                                     var contentChunk = delta["content"]?.ToString() ?? "";
                                     if (!string.IsNullOrEmpty(contentChunk))
@@ -643,10 +692,10 @@ namespace Lyxie_desktop.Services
                     {
                         id = tc.Id,
                         type = tc.Type,
-                        function = new
+                        function = tc.Function == null ? null : new
                         {
-                            name = tc.Function?.Name,
-                            arguments = tc.Function?.Arguments
+                            name = tc.Function!.Name,
+                            arguments = tc.Function!.Arguments
                         }
                     }).ToArray()
                 }).ToArray();
@@ -657,7 +706,15 @@ namespace Lyxie_desktop.Services
                 if (availableTools != null && availableTools.Count > 0)
                 {
                     var openAITools = ConvertToOpenAIToolFormat(availableTools);
-                    
+
+                    // 使用工具选择优化器确定最佳tool_choice策略
+                    string toolChoice = "auto";
+                    if (App.ToolSelectionOptimizer != null && messages.Count > 0)
+                    {
+                        var userMessage = messages.FirstOrDefault(m => m.Role == "user")?.Content ?? "";
+                        toolChoice = App.ToolSelectionOptimizer.GetOptimalToolChoice(availableTools, userMessage);
+                    }
+
                     requestData = new
                     {
                         model = config.ModelName,
@@ -665,7 +722,7 @@ namespace Lyxie_desktop.Services
                         temperature = config.Temperature,
                         max_tokens = config.MaxTokens,
                         tools = openAITools.ToArray(),
-                        tool_choice = "auto"
+                        tool_choice = toolChoice
                     };
                 }
                 else

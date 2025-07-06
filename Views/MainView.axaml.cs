@@ -142,6 +142,9 @@ public partial class MainView : UserControl
         
         // 初始化MCP工具管理器
         InitializeMcpToolManager();
+
+        // 初始化MCP状态监控
+        InitializeMcpStatusMonitoring();
     }
     
     // 初始化工具面板开关状态
@@ -528,15 +531,15 @@ public partial class MainView : UserControl
                             
                             // 重新获取配置以获取最新状态
                             configs = await App.McpService.GetConfigsAsync();
-                            if (configs.TryGetValue("filesystem", out config))
+                            if (configs.TryGetValue("filesystem", out var updatedConfig) && updatedConfig != null)
                             {
                                 // 更新UI状态
-                                bool available = config.IsAvailable;
+                                bool available = updatedConfig.IsAvailable;
                                 dev2Toggle.Content = available ? "已启用 - 可用" : "已启用 - 验证失败";
                                 Debug.WriteLine($"服务器验证完成，状态: {(available ? "可用" : "不可用")}");
                                 
                                 // 如果验证失败，记录错误信息
-                                if (!available && validationResults.TryGetValue("filesystem", out var result))
+                                if (!available && validationResults.TryGetValue("filesystem", out var result) && result != null)
                                 {
                                     Debug.WriteLine($"验证失败原因: {result.ErrorMessage ?? "未知"}");
                                 }
@@ -604,25 +607,51 @@ public partial class MainView : UserControl
                     }
 
                     // 3. 更新UI
-                    dev2Toggle.Content = "已禁用";
+                    if (dev2Toggle != null)
+                    {
+                        dev2Toggle.Content = "已禁用";
+                    }
                     Debug.WriteLine("UI状态更新为已禁用");
                 }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"MCP文件系统服务操作异常: {ex.Message}");
-                dev2Toggle.Content = "操作异常";
-                
-                // 还原UI状态
-                if (dev2Toggle.IsChecked != App.Settings.EnableDev2)
+                if (dev2Toggle != null)
                 {
-                    dev2Toggle.IsChecked = App.Settings.EnableDev2;
+                    dev2Toggle.Content = "操作异常";
+
+                    // 还原UI状态
+                    if (dev2Toggle.IsChecked != App.Settings.EnableDev2)
+                    {
+                        dev2Toggle.IsChecked = App.Settings.EnableDev2;
+                    }
                 }
             }
             finally
             {
-                // 恢复开关可用性
-                dev2Toggle.IsEnabled = true;
+                if (dev2Toggle != null)
+                {
+                    // 恢复开关可用性
+                    dev2Toggle.IsEnabled = true;
+                }
+
+                // 触发MCP状态监控更新
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        if (App.McpServiceMonitor != null)
+                        {
+                            await App.McpServiceMonitor.TriggerStatusUpdateAsync();
+                            Debug.WriteLine("已触发MCP状态监控更新");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"触发MCP状态监控更新失败: {ex.Message}");
+                    }
+                });
             }
         }
     }
@@ -2053,6 +2082,136 @@ public partial class MainView : UserControl
             Debug.WriteLine($"MCP工具管理器初始化失败: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// 初始化MCP状态监控
+    /// </summary>
+    private void InitializeMcpStatusMonitoring()
+    {
+        try
+        {
+            // 订阅MCP服务状态变化事件
+            if (App.McpServiceMonitor != null)
+            {
+                App.McpServiceMonitor.StatusChanged += OnMcpStatusChanged;
+                Debug.WriteLine("MCP状态监控事件已订阅");
+
+                // 立即更新一次状态显示
+                UpdateMcpStatusDisplay(App.McpServiceMonitor.CurrentStatus);
+            }
+            else
+            {
+                Debug.WriteLine("MCP服务监控未初始化，将显示默认状态");
+                UpdateMcpStatusDisplay(null);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"初始化MCP状态监控失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// MCP状态变化事件处理
+    /// </summary>
+    private void OnMcpStatusChanged(object? sender, McpServiceStatusInfo statusInfo)
+    {
+        // 在UI线程中更新状态显示
+        Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            UpdateMcpStatusDisplay(statusInfo);
+        });
+    }
+
+    /// <summary>
+    /// 更新MCP状态显示
+    /// </summary>
+    private void UpdateMcpStatusDisplay(McpServiceStatusInfo? statusInfo)
+    {
+        try
+        {
+            var statusIcon = this.FindControl<Border>("McpStatusIcon");
+            var statusText = this.FindControl<TextBlock>("McpStatusText");
+            var tooltipTitle = this.FindControl<TextBlock>("McpTooltipTitle");
+            var tooltipDetails = this.FindControl<TextBlock>("McpTooltipDetails");
+
+            if (statusIcon == null || statusText == null) return;
+
+            if (statusInfo == null)
+            {
+                // 默认状态
+                statusIcon.Classes.Clear();
+                statusIcon.Classes.Add("error");
+                statusText.Text = "MCP未初始化";
+
+                if (tooltipDetails != null)
+                {
+                    tooltipDetails.Text = "MCP服务尚未初始化或初始化失败";
+                }
+                return;
+            }
+
+            // 清除所有状态类
+            statusIcon.Classes.Clear();
+
+            // 根据状态设置图标样式和文本
+            switch (statusInfo.Status)
+            {
+                case McpServiceStatus.Running:
+                    statusIcon.Classes.Add("running");
+                    statusText.Text = $"MCP运行中 ({statusInfo.RunningServers}/{statusInfo.TotalServers})";
+                    break;
+
+                case McpServiceStatus.PartiallyAvailable:
+                    statusIcon.Classes.Add("partial");
+                    statusText.Text = $"MCP部分可用 ({statusInfo.RunningServers}/{statusInfo.TotalServers})";
+                    break;
+
+                case McpServiceStatus.Initializing:
+                    statusIcon.Classes.Add("initializing");
+                    statusText.Text = "MCP初始化中...";
+                    break;
+
+                case McpServiceStatus.Unavailable:
+                    statusIcon.Classes.Add("error");
+                    statusText.Text = "MCP不可用";
+                    break;
+
+                case McpServiceStatus.Error:
+                    statusIcon.Classes.Add("error");
+                    statusText.Text = "MCP错误";
+                    break;
+
+                default:
+                    statusIcon.Classes.Add("error");
+                    statusText.Text = "MCP未知状态";
+                    break;
+            }
+
+            // 更新工具提示详细信息
+            if (tooltipDetails != null)
+            {
+                var details = new List<string>();
+                details.Add($"状态: {statusInfo.StatusMessage}");
+                details.Add($"服务器: {statusInfo.RunningServers}/{statusInfo.TotalServers}");
+                details.Add($"可用工具: {statusInfo.AvailableTools}");
+                details.Add($"更新时间: {statusInfo.LastUpdated:HH:mm:ss}");
+
+                if (!string.IsNullOrEmpty(statusInfo.ErrorMessage))
+                {
+                    details.Add($"错误: {statusInfo.ErrorMessage}");
+                }
+
+                tooltipDetails.Text = string.Join("\n", details);
+            }
+
+            Debug.WriteLine($"MCP状态显示已更新: {statusInfo.Status} - {statusInfo.StatusMessage}");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"更新MCP状态显示失败: {ex.Message}");
+        }
+    }
     
     /// <summary>
     /// 工具调用状态变化处理
@@ -2287,7 +2446,7 @@ public partial class MainView : UserControl
         StackPanel messageList, 
         ScrollViewer? messageScrollViewer)
     {
-        if (_mcpToolManager == null || _toolCallExecutor == null)
+        if (_mcpToolManager == null || _toolCallExecutor == null || _cancellationTokenSource == null)
         {
             // 如果工具管理器未初始化，使用普通对话模式
             await ProcessNormalConversationAsync(config, userMessage, messageList, messageScrollViewer);
@@ -2300,15 +2459,37 @@ public partial class MainView : UserControl
             var availableTools = await _mcpToolManager.GetAvailableToolsAsync(_cancellationTokenSource.Token);
             Debug.WriteLine($"获取到 {availableTools.Count} 个可用工具");
 
-            // 2. 构建对话历史
+            // 2. 生成优化的工具选择提示
+            string enhancedUserMessage = userMessage;
+            if (App.ToolSelectionOptimizer != null && availableTools.Count > 0)
+            {
+                var toolSelectionPrompt = App.ToolSelectionOptimizer.GenerateToolSelectionPrompt(availableTools, userMessage);
+                enhancedUserMessage = $"{toolSelectionPrompt}\n\n用户请求：{userMessage}";
+                Debug.WriteLine("已生成工具选择优化提示");
+            }
+
+            // 3. 构建对话历史
             var conversationMessages = new List<ConversationMessage>
             {
                 new ConversationMessage
                 {
                     Role = "user",
-                    Content = userMessage
+                    Content = enhancedUserMessage
                 }
             };
+
+            // 4. 应用上下文管理优化
+            if (App.ConversationContextManager != null)
+            {
+                conversationMessages = App.ConversationContextManager.TruncateConversationHistory(conversationMessages);
+                conversationMessages = App.ConversationContextManager.OptimizeToolCallResults(conversationMessages);
+
+                // 更新对话状态
+                App.ConversationContextManager.UpdateConversationState("last_user_message", userMessage);
+                App.ConversationContextManager.UpdateConversationState("message_count", conversationMessages.Count);
+
+                Debug.WriteLine("已应用对话上下文管理优化");
+            }
 
             // 3. 创建AI回复气泡
             MessageBubble? aiBubble = null;
@@ -2425,6 +2606,20 @@ public partial class MainView : UserControl
                 // 添加工具调用结果
                 var toolMessages = _toolCallExecutor.ConvertExecutionsToMessages(toolExecutions);
                 conversationMessages.AddRange(toolMessages);
+
+                // 应用上下文管理优化（每轮对话后）
+                if (App.ConversationContextManager != null)
+                {
+                    conversationMessages = App.ConversationContextManager.TruncateConversationHistory(conversationMessages);
+                    conversationMessages = App.ConversationContextManager.OptimizeToolCallResults(conversationMessages);
+
+                    // 更新对话状态
+                    App.ConversationContextManager.UpdateConversationState("current_round", currentRound);
+                    App.ConversationContextManager.UpdateConversationState("tool_call_count", toolExecutions.Count);
+                }
+
+                // 继续下一轮对话，让LLM基于工具结果生成最终回复
+                Debug.WriteLine("工具调用完成，继续下一轮让LLM生成最终回复");
             }
 
             // 10. 完成流式显示并保存消息
@@ -2441,7 +2636,10 @@ public partial class MainView : UserControl
                 if (!string.IsNullOrWhiteSpace(fullAiResponse))
                 {
                     await SaveMessageToCurrentSession(fullAiResponse, MessageType.Assistant);
-                    HandleAiResponseForTts(fullAiResponse, aiBubble);
+                    if (aiBubble != null)
+                    {
+                        HandleAiResponseForTts(fullAiResponse, aiBubble);
+                    }
                 }
             }
 
@@ -2492,38 +2690,45 @@ public partial class MainView : UserControl
             var success = await apiService.SendStreamingMessageAsync(
                 config,
                 userMessage,
-                onDataReceived: (content, isComplete) =>
+                (text, isComplete) =>
                 {
-                    if (aiBubble != null)
+                    if (!string.IsNullOrEmpty(text))
                     {
-                        if (!string.IsNullOrEmpty(content))
+                        Dispatcher.UIThread.Post(() =>
                         {
-                            _currentAiResponseBuilder?.Append(content);
-                        }
-
-                        if (isComplete)
-                        {
-                            aiBubble.CompleteStreamingAndEnableMarkdown();
-                            Dispatcher.UIThread.Post(() =>
+                            if (aiBubble != null)
                             {
+                                aiBubble.AppendContent(text);
                                 messageScrollViewer?.ScrollToEnd();
-                            });
-                            
-                            var fullAiResponse = _currentAiResponseBuilder?.ToString();
-                            if (!string.IsNullOrWhiteSpace(fullAiResponse))
+                            }
+                        });
+                    }
+
+                    if (isComplete)
+                    {
+                        aiBubble?.CompleteStreamingAndEnableMarkdown();
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            messageScrollViewer?.ScrollToEnd();
+                        });
+                        
+                        var fullAiResponse = _currentAiResponseBuilder?.ToString();
+                        if (!string.IsNullOrWhiteSpace(fullAiResponse))
+                        {
+                            _ = SaveMessageToCurrentSession(fullAiResponse, MessageType.Assistant);
+                            if (aiBubble != null)
                             {
-                                _ = SaveMessageToCurrentSession(fullAiResponse, MessageType.Assistant);
                                 HandleAiResponseForTts(fullAiResponse, aiBubble);
                             }
                         }
-                        else if (!string.IsNullOrEmpty(content))
+                    }
+                    else if (!string.IsNullOrEmpty(text))
+                    {
+                        aiBubble?.AppendContent(text);
+                        Dispatcher.UIThread.Post(() =>
                         {
-                            aiBubble.AppendContent(content);
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                messageScrollViewer?.ScrollToEnd();
-                            });
-                        }
+                            messageScrollViewer?.ScrollToEnd();
+                        });
                     }
                 },
                 onError: (error) =>
@@ -2553,7 +2758,7 @@ public partial class MainView : UserControl
                     {
                         try
                         {
-                            aiBubble.CompleteStreamingAndEnableMarkdown();
+                            aiBubble?.CompleteStreamingAndEnableMarkdown();
                         }
                         catch
                         {

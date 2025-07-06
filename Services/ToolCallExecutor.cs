@@ -34,8 +34,8 @@ namespace Lyxie_desktop.Services
         /// <param name="cancellationToken">取消令牌</param>
         /// <returns>工具调用执行结果列表</returns>
         public async Task<List<ToolCallExecution>> ExecuteToolCallsAsync(
-            List<LlmToolCall> llmToolCalls, 
-            List<McpTool> availableTools, 
+            List<LlmToolCall> llmToolCalls,
+            List<McpTool> availableTools,
             CancellationToken cancellationToken = default)
         {
             var executions = new List<ToolCallExecution>();
@@ -48,79 +48,263 @@ namespace Lyxie_desktop.Services
 
             Debug.WriteLine($"开始执行 {llmToolCalls.Count} 个工具调用");
 
-            // 并行执行所有工具调用
-            var tasks = llmToolCalls.Select(async toolCall =>
+            // 1. 使用工具调用链管理器分析依赖关系
+            ToolCallChain? chain = null;
+            if (App.ToolCallChainManager != null)
             {
-                var execution = new ToolCallExecution
+                chain = App.ToolCallChainManager.AnalyzeDependencies(llmToolCalls);
+
+                if (chain.HasConflicts)
                 {
-                    LlmToolCall = toolCall,
-                    StartTime = DateTime.Now,
-                    Status = ToolExecutionStatus.Pending
-                };
-
-                try
-                {
-                    execution.Status = ToolExecutionStatus.Executing;
-                    
-                    // 触发开始事件
-                    ToolCallExecutionStarted?.Invoke(this, new ToolCallExecutionEventArgs(execution));
-
-                    Debug.WriteLine($"执行工具调用: {toolCall.Function?.Name} (ID: {toolCall.Id})");
-
-                    // 解析工具调用参数
-                    var mcpToolCall = ConvertToMcpToolCall(toolCall, availableTools);
-                    if (mcpToolCall == null)
+                    Debug.WriteLine($"检测到工具调用冲突，将按原顺序执行");
+                    foreach (var conflict in chain.ConflictDetails)
                     {
-                        execution.Status = ToolExecutionStatus.Failed;
-                        execution.ErrorMessage = $"无法找到工具 '{toolCall.Function?.Name}' 或参数解析失败";
-                        execution.EndTime = DateTime.Now;
-                        
-                        ToolCallExecutionFailed?.Invoke(this, new ToolCallExecutionEventArgs(execution));
-                        return execution;
+                        Debug.WriteLine($"冲突: {conflict.Description}");
                     }
+                }
+                else
+                {
+                    Debug.WriteLine($"工具调用链分析完成，优化后执行顺序包含 {chain.EnhancedCalls.Count} 个步骤");
+                }
+            }
 
-                    // 执行MCP工具调用
-                    var result = await _mcpToolManager.CallToolAsync(mcpToolCall, cancellationToken);
-                    
-                    execution.McpResult = result;
-                    execution.Status = result.IsSuccess ? ToolExecutionStatus.Completed : ToolExecutionStatus.Failed;
+            // 2. 根据分析结果决定执行策略
+            var toolCallsToExecute = chain?.HasConflicts == false && chain.EnhancedCalls.Count > 0
+                ? chain.EnhancedCalls.Select(ec => ec.OriginalCall).ToList()
+                : llmToolCalls;
+
+            // 3. 执行工具调用（如果有冲突则串行执行，否则并行执行）
+            if (chain?.HasConflicts == true)
+            {
+                Debug.WriteLine("检测到冲突，使用串行执行模式");
+                return await ExecuteToolCallsSequentially(toolCallsToExecute, availableTools, chain, cancellationToken);
+            }
+            else
+            {
+                Debug.WriteLine("使用并行执行模式");
+                return await ExecuteToolCallsInParallel(toolCallsToExecute, availableTools, chain, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// 执行单个工具调用
+        /// </summary>
+        private async Task<ToolCallExecution> ExecuteSingleToolCall(
+            LlmToolCall toolCall,
+            List<McpTool> availableTools,
+            CancellationToken cancellationToken)
+        {
+            var execution = new ToolCallExecution
+            {
+                LlmToolCall = toolCall,
+                StartTime = DateTime.Now,
+                Status = ToolExecutionStatus.Pending
+            };
+
+            // 开始计时
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            try
+            {
+                execution.Status = ToolExecutionStatus.Executing;
+
+                // 触发开始事件
+                ToolCallExecutionStarted?.Invoke(this, new ToolCallExecutionEventArgs(execution));
+
+                Debug.WriteLine($"执行工具调用: {toolCall.Function?.Name} (ID: {toolCall.Id})");
+
+                // 解析工具调用参数
+                var mcpToolCall = ConvertToMcpToolCall(toolCall, availableTools);
+                if (mcpToolCall == null)
+                {
+                    execution.Status = ToolExecutionStatus.Failed;
+                    execution.ErrorMessage = $"无法找到工具 '{toolCall.Function?.Name}' 或参数解析失败";
                     execution.EndTime = DateTime.Now;
 
-                    if (result.IsSuccess)
-                    {
-                        Debug.WriteLine($"工具调用成功: {toolCall.Function?.Name}");
-                        ToolCallExecutionCompleted?.Invoke(this, new ToolCallExecutionEventArgs(execution));
-                    }
-                    else
-                    {
-                        execution.ErrorMessage = result.ErrorMessage;
-                        Debug.WriteLine($"工具调用失败: {toolCall.Function?.Name} - {result.ErrorMessage}");
-                        ToolCallExecutionFailed?.Invoke(this, new ToolCallExecutionEventArgs(execution));
-                    }
+                    ToolCallExecutionFailed?.Invoke(this, new ToolCallExecutionEventArgs(execution));
+                    return execution;
+                }
+
+                // 执行MCP工具调用
+                var result = await _mcpToolManager.CallToolAsync(mcpToolCall, cancellationToken);
+
+                execution.McpResult = result;
+                execution.Status = result.IsSuccess ? ToolExecutionStatus.Completed : ToolExecutionStatus.Failed;
+                execution.EndTime = DateTime.Now;
+
+                // 停止计时并更新统计
+                stopwatch.Stop();
+                var executionTimeMs = stopwatch.Elapsed.TotalMilliseconds;
+
+                // 更新工具选择优化器的统计信息
+                if (App.ToolSelectionOptimizer != null && toolCall.Function?.Name != null)
+                {
+                    App.ToolSelectionOptimizer.UpdateToolStatistics(
+                        toolCall.Function.Name,
+                        result.IsSuccess,
+                        executionTimeMs
+                    );
+                }
+
+                if (result.IsSuccess)
+                {
+                    Debug.WriteLine($"工具调用成功: {toolCall.Function?.Name} (耗时: {executionTimeMs:F0}ms)");
+                    ToolCallExecutionCompleted?.Invoke(this, new ToolCallExecutionEventArgs(execution));
+                }
+                else
+                {
+                    execution.ErrorMessage = result.ErrorMessage;
+                    Debug.WriteLine($"工具调用失败: {toolCall.Function?.Name} - {result.ErrorMessage} (耗时: {executionTimeMs:F0}ms)");
+                    ToolCallExecutionFailed?.Invoke(this, new ToolCallExecutionEventArgs(execution));
+                }
+            }
+            catch (Exception ex)
+            {
+                execution.Status = ToolExecutionStatus.Failed;
+                execution.EndTime = DateTime.Now;
+
+                // 停止计时并更新统计（异常情况）
+                stopwatch.Stop();
+                var executionTimeMs = stopwatch.Elapsed.TotalMilliseconds;
+
+                // 使用错误处理管理器处理异常
+                if (App.ErrorHandlingManager != null)
+                {
+                    var errorResult = await App.ErrorHandlingManager.HandleErrorAsync(
+                        ex,
+                        $"工具调用: {toolCall.Function?.Name}",
+                        "mcp_tool",
+                        cancellationToken
+                    );
+                    execution.ErrorMessage = errorResult.UserMessage;
+                    // 记录重试建议但避免递归重试
+                }
+                else
+                {
+                    execution.ErrorMessage = ex.Message;
+                }
+
+                // 更新工具选择优化器的统计信息（失败）
+                if (App.ToolSelectionOptimizer != null && toolCall.Function?.Name != null)
+                {
+                    App.ToolSelectionOptimizer.UpdateToolStatistics(
+                        toolCall.Function.Name,
+                        false,
+                        executionTimeMs
+                    );
+                }
+
+                Debug.WriteLine($"工具调用异常: {toolCall.Function?.Name} - {execution.ErrorMessage} (耗时: {executionTimeMs:F0}ms)");
+                ToolCallExecutionFailed?.Invoke(this, new ToolCallExecutionEventArgs(execution));
+            }
+
+            return execution;
+        }
+
+        /// <summary>
+        /// 并行执行工具调用
+        /// </summary>
+        private async Task<List<ToolCallExecution>> ExecuteToolCallsInParallel(
+            List<LlmToolCall> toolCalls,
+            List<McpTool> availableTools,
+            ToolCallChain? chain,
+            CancellationToken cancellationToken)
+        {
+            // 使用并行执行管理器进行高性能并行执行
+            if (App.ParallelExecutionManager != null)
+            {
+                try
+                {
+                    Debug.WriteLine($"使用并行执行管理器执行 {toolCalls.Count} 个工具调用");
+
+                    var parallelResults = await App.ParallelExecutionManager.ExecuteInParallelAsync(
+                        toolCalls,
+                        async (toolCall, ct) => await ExecuteSingleToolCall(toolCall, availableTools, ct),
+                        cancellationToken
+                    );
+
+                    var parallelSuccessCount = parallelResults.Count(e => e.Status == ToolExecutionStatus.Completed);
+                    var parallelFailedCount = parallelResults.Count(e => e.Status == ToolExecutionStatus.Failed);
+
+                    Debug.WriteLine($"并行执行管理器完成: 成功 {parallelSuccessCount}，失败 {parallelFailedCount}");
+                    return parallelResults;
                 }
                 catch (Exception ex)
                 {
-                    execution.Status = ToolExecutionStatus.Failed;
-                    execution.ErrorMessage = ex.Message;
-                    execution.EndTime = DateTime.Now;
-                    
-                    Debug.WriteLine($"工具调用异常: {toolCall.Function?.Name} - {ex.Message}");
-                    ToolCallExecutionFailed?.Invoke(this, new ToolCallExecutionEventArgs(execution));
+                    Debug.WriteLine($"并行执行管理器异常: {ex.Message}，回退到传统并行执行");
+                    // 回退到传统并行执行
                 }
+            }
 
-                return execution;
+            // 传统并行执行（备用方案）
+            var executions = new List<ToolCallExecution>();
+
+            // 创建并发执行任务
+            var tasks = toolCalls.Select(async toolCall =>
+            {
+                return await ExecuteSingleToolCall(toolCall, availableTools, cancellationToken);
             });
 
+            // 等待所有任务完成
             var results = await Task.WhenAll(tasks);
             executions.AddRange(results);
 
             var successCount = executions.Count(e => e.Status == ToolExecutionStatus.Completed);
             var failedCount = executions.Count(e => e.Status == ToolExecutionStatus.Failed);
-            
-            Debug.WriteLine($"工具调用执行完成: 成功 {successCount}，失败 {failedCount}");
 
+            Debug.WriteLine($"传统并行工具调用执行完成: 成功 {successCount}，失败 {failedCount}");
             return executions;
         }
+
+        /// <summary>
+        /// 串行执行工具调用
+        /// </summary>
+        private async Task<List<ToolCallExecution>> ExecuteToolCallsSequentially(
+            List<LlmToolCall> toolCalls,
+            List<McpTool> availableTools,
+            ToolCallChain? chain,
+            CancellationToken cancellationToken)
+        {
+            var executions = new List<ToolCallExecution>();
+
+            foreach (var toolCall in toolCalls)
+            {
+                var execution = await ExecuteSingleToolCall(toolCall, availableTools, cancellationToken);
+                executions.Add(execution);
+
+                // 验证工具调用结果
+                if (App.ToolCallChainManager != null && execution.McpResult != null)
+                {
+                    var validationResult = await App.ToolCallChainManager.ValidateToolCallResult(
+                        toolCall.Function?.Name ?? "", execution.McpResult);
+
+                    if (!validationResult.IsValid)
+                    {
+                        Debug.WriteLine($"工具调用验证失败: {validationResult.ErrorMessage}");
+                        execution.Status = ToolExecutionStatus.Failed;
+                        execution.ErrorMessage = validationResult.ErrorMessage;
+
+                        // 如果验证失败，可以选择停止后续执行或继续
+                        // 这里选择继续执行，但记录错误
+                    }
+                }
+
+                // 如果当前工具调用失败且是关键步骤，可以考虑回滚
+                if (execution.Status == ToolExecutionStatus.Failed && chain != null)
+                {
+                    Debug.WriteLine($"关键工具调用失败，考虑回滚: {toolCall.Function?.Name}");
+                    // 这里可以实现回滚逻辑
+                }
+            }
+
+            var successCount = executions.Count(e => e.Status == ToolExecutionStatus.Completed);
+            var failedCount = executions.Count(e => e.Status == ToolExecutionStatus.Failed);
+
+            Debug.WriteLine($"串行工具调用执行完成: 成功 {successCount}，失败 {failedCount}");
+            return executions;
+        }
+
+
 
         /// <summary>
         /// 将LLM工具调用转换为MCP工具调用
