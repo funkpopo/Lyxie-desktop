@@ -139,12 +139,6 @@ public partial class MainView : UserControl
         
         // 初始化聊天历史和侧边栏
         InitializeChatHistory();
-        
-        // 初始化MCP工具管理器
-        InitializeMcpToolManager();
-
-        // 初始化MCP状态监控
-        InitializeMcpStatusMonitoring();
     }
     
     // 初始化工具面板开关状态
@@ -175,27 +169,13 @@ public partial class MainView : UserControl
                 if (configs.TryGetValue("filesystem", out var config))
                 {
                     // 设置UI显示状态
-                    if (config.IsEnabled && isRunning)
+                    if (config.IsEnabled)
                     {
-                        if (config.IsAvailable)
-                        {
-                            dev2Toggle.Content = "已启用 - 可用";
-                        }
-                        else
-                        {
-                            dev2Toggle.Content = "已启用 - 未验证";
-                        }
-                    }
-                    else if (config.IsEnabled && !isRunning)
-                    {
-                        dev2Toggle.Content = "已启用 - 未运行";
+                        dev2Toggle.Content = isRunning ? "已启用 - 运行中" : "已启用 - 未运行";
                     }
                     else
                     {
                         dev2Toggle.Content = "已禁用";
-                        // 确保自动验证也被关闭
-                        config.AutoValidationEnabled = false;
-                        await App.McpService.SaveConfigsAsync(configs);
                     }
                 }
                 else
@@ -469,189 +449,79 @@ public partial class MainView : UserControl
 
     private async void OnDev2Toggled(object? sender, RoutedEventArgs e)
     {
-        if (sender is ToggleSwitch toggle)
-        {
-            bool isEnabled = toggle.IsChecked ?? false;
-            App.Settings.EnableDev2 = isEnabled;
-            App.SaveSettings();
-            
-            var dev2Toggle = toggle; // 在异步方法中使用本地变量
+        if (sender is not ToggleSwitch dev2Toggle) return;
+        
+        // 立即禁用开关，防止快速切换
+        dev2Toggle.IsEnabled = false;
 
-            // MCP文件系统工具切换
-            try
+        try
+        {
+            App.Settings.EnableDev2 = dev2Toggle.IsChecked ?? false;
+            App.SaveSettings();
+
+            if (dev2Toggle.IsChecked == true)
             {
-                // 防止重复操作
-                dev2Toggle.IsEnabled = false;
-                Debug.WriteLine($"MCP开关切换: {(isEnabled ? "开启" : "关闭")}");
+                dev2Toggle.Content = "正在启用...";
+                Debug.WriteLine("请求启用MCP文件系统服务...");
                 
-                if (isEnabled)
+                var configs = await App.McpService.GetConfigsAsync();
+                if (configs.TryGetValue("filesystem", out var config))
                 {
-                    dev2Toggle.Content = "正在启用...";
-                    Debug.WriteLine("请求启用MCP文件系统服务...");
+                    config.IsEnabled = true;
+                    await App.McpService.SaveConfigsAsync(configs);
+
+                    bool success = await App.McpService.StartServerAsync("filesystem");
                     
-                    // 获取服务器配置
-                    var configs = await App.McpService.GetConfigsAsync();
-                    if (configs.TryGetValue("filesystem", out var config))
+                    if (success)
                     {
-                        // 1. 更新配置为启用
-                        config.IsEnabled = true;
-                        Debug.WriteLine("更新服务器配置状态为启用");
-                        await App.McpService.SaveConfigsAsync(configs);
-                        
-                        // 2. 先检查服务是否已运行，避免重复启动
-                        bool isRunning = App.McpService.IsServerRunning("filesystem");
-                        Debug.WriteLine($"检查服务器是否已运行: {isRunning}");
-                        
-                        bool needsStart = !isRunning;
-                        bool success = isRunning; // 如果已运行，则视为成功
-                        
-                        // 如果需要启动
-                        if (needsStart)
-                        {
-                            // 启动底层服务器
-                            Debug.WriteLine("服务器未运行，尝试启动...");
-                            success = await App.McpService.StartServerAsync("filesystem");
-                            Debug.WriteLine($"服务器启动结果: {success}");
-                        }
-                        
-                        if (success)
-                        {
-                            Debug.WriteLine("MCP文件系统服务已启动，现触发验证...");
-                            dev2Toggle.Content = "正在验证...";
-                            
-                            // 强制状态更新
-                            if (isRunning && !config.IsRunning)
-                            {
-                                config.IsRunning = true;
-                                await App.McpService.SaveConfigsAsync(configs);
-                            }
-                            
-                            // 强制重新验证
-                            var validationResults = await App.McpAutoValidationService.TriggerValidationAsync(forceCheck: true);
-                            
-                            // 重新获取配置以获取最新状态
-                            configs = await App.McpService.GetConfigsAsync();
-                            if (configs.TryGetValue("filesystem", out var updatedConfig) && updatedConfig != null)
-                            {
-                                // 更新UI状态
-                                bool available = updatedConfig.IsAvailable;
-                                dev2Toggle.Content = available ? "已启用 - 可用" : "已启用 - 验证失败";
-                                Debug.WriteLine($"服务器验证完成，状态: {(available ? "可用" : "不可用")}");
-                                
-                                // 如果验证失败，记录错误信息
-                                if (!available && validationResults.TryGetValue("filesystem", out var result) && result != null)
-                                {
-                                    Debug.WriteLine($"验证失败原因: {result.ErrorMessage ?? "未知"}");
-                                }
-                            }
-                            else
-                            {
-                                dev2Toggle.Content = "已启用 - 未知状态";
-                                Debug.WriteLine("无法获取服务器配置");
-                            }
-                        }
-                        else
-                        {
-                            Debug.WriteLine("MCP文件系统服务启动失败");
-                            dev2Toggle.Content = "启动失败";
-                            
-                            // 还原设置
-                            App.Settings.EnableDev2 = false;
-                            App.SaveSettings();
-                            
-                            // 修正开关状态，避免UI和实际状态不一致
-                            dev2Toggle.IsChecked = false;
-                        }
+                        dev2Toggle.Content = "已启用";
+                        Debug.WriteLine("MCP文件系统服务已成功启动");
                     }
                     else
                     {
-                        Debug.WriteLine("未找到MCP文件系统服务配置");
-                        dev2Toggle.Content = "配置缺失";
-                        
-                        // 还原设置
-                        App.Settings.EnableDev2 = false;
-                        App.SaveSettings();
-                        
-                        // 修正开关状态
-                        dev2Toggle.IsChecked = false;
+                        Debug.WriteLine("MCP文件系统服务启动失败");
+                        dev2Toggle.Content = "启动失败";
+                        dev2Toggle.IsChecked = false; // Revert
                     }
                 }
                 else
                 {
-                    dev2Toggle.Content = "正在禁用...";
-                    Debug.WriteLine("请求禁用MCP文件系统服务...");
-                    
-                    // 1. 获取服务器配置并更新为禁用
-                    var configs = await App.McpService.GetConfigsAsync();
-                    if (configs.TryGetValue("filesystem", out var config))
-                    {
-                        config.IsEnabled = false;
-                        Debug.WriteLine("更新服务器配置状态为禁用");
-                        await App.McpService.SaveConfigsAsync(configs);
-                        
-                        // 清除验证状态
-                        App.McpAutoValidationService.ResetValidationState("filesystem");
-                    }
-                    
-                    // 2. 停止底层服务器
-                    bool isRunning = App.McpService.IsServerRunning("filesystem");
-                    if (isRunning)
-                    {
-                        Debug.WriteLine("服务器正在运行，尝试停止...");
-                        bool stopped = await App.McpService.StopServerAsync("filesystem");
-                        Debug.WriteLine($"MCP文件系统服务停止{(stopped ? "成功" : "失败")}");
-                    }
-                    else
-                    {
-                        Debug.WriteLine("服务器未运行，无需停止");
-                    }
-
-                    // 3. 更新UI
-                    if (dev2Toggle != null)
-                    {
-                        dev2Toggle.Content = "已禁用";
-                    }
-                    Debug.WriteLine("UI状态更新为已禁用");
+                    Debug.WriteLine("未找到MCP文件系统服务配置");
+                    dev2Toggle.Content = "配置缺失";
+                    dev2Toggle.IsChecked = false; // Revert
                 }
             }
-            catch (Exception ex)
+            else
             {
-                Debug.WriteLine($"MCP文件系统服务操作异常: {ex.Message}");
-                if (dev2Toggle != null)
+                dev2Toggle.Content = "正在禁用...";
+                Debug.WriteLine("请求禁用MCP文件系统服务...");
+                
+                var configs = await App.McpService.GetConfigsAsync();
+                if (configs.TryGetValue("filesystem", out var config))
                 {
-                    dev2Toggle.Content = "操作异常";
-
-                    // 还原UI状态
-                    if (dev2Toggle.IsChecked != App.Settings.EnableDev2)
-                    {
-                        dev2Toggle.IsChecked = App.Settings.EnableDev2;
-                    }
+                    config.IsEnabled = false;
+                    await App.McpService.SaveConfigsAsync(configs);
                 }
+                
+                await App.McpService.StopServerAsync("filesystem");
+                dev2Toggle.Content = "已禁用";
+                Debug.WriteLine("UI状态更新为已禁用");
             }
-            finally
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"MCP文件系统服务操作异常: {ex.Message}");
+            if (dev2Toggle != null)
             {
-                if (dev2Toggle != null)
-                {
-                    // 恢复开关可用性
-                    dev2Toggle.IsEnabled = true;
-                }
-
-                // 触发MCP状态监控更新
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        if (App.McpServiceMonitor != null)
-                        {
-                            await App.McpServiceMonitor.TriggerStatusUpdateAsync();
-                            Debug.WriteLine("已触发MCP状态监控更新");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"触发MCP状态监控更新失败: {ex.Message}");
-                    }
-                });
+                dev2Toggle.Content = "操作异常";
+                dev2Toggle.IsChecked = App.Settings.EnableDev2; // Revert to saved state
+            }
+        }
+        finally
+        {
+            if (dev2Toggle != null)
+            {
+                dev2Toggle.IsEnabled = true;
             }
         }
     }
@@ -1980,288 +1850,7 @@ public partial class MainView : UserControl
             _ttsApiService?.PlayFromFileAsync(bubble.AudioFilePath, ttsConfig);
         }
     }
-    
-    /// <summary>
-    /// 初始化MCP工具管理器
-    /// </summary>
-    private async void InitializeMcpToolManager()
-    {
-        try
-        {
-            Debug.WriteLine("开始初始化MCP工具管理器...");
-            
-            // 创建必要的服务实例
-            var mcpService = new McpService();
-            var serverManager = mcpService.ServerManager;
-            _mcpToolManager = new McpToolManager(mcpService, serverManager);
-            
-            // 初始化工具调用执行器
-            _toolCallExecutor = new ToolCallExecutor(_mcpToolManager);
-            
-            // 订阅工具调用状态事件
-            _mcpToolManager.ToolCallStatusChanged += OnToolCallStatusChanged;
-            _toolCallExecutor.ToolCallExecutionStarted += OnToolCallExecutionStarted;
-            _toolCallExecutor.ToolCallExecutionCompleted += OnToolCallExecutionCompleted;
-            _toolCallExecutor.ToolCallExecutionFailed += OnToolCallExecutionFailed;
-            
-            // 如果设置中启用了MCP，则检查并确保服务正确启动
-            if (App.Settings.EnableDev2)
-            {
-                Debug.WriteLine("MCP功能已在设置中启用，检查服务状态...");
-                
-                var configs = await mcpService.GetConfigsAsync();
-                if (configs.TryGetValue("filesystem", out var config))
-                {
-                    // 检查文件系统服务器状态并修复
-                    bool isRunning = serverManager.IsServerRunning("filesystem");
-                    Debug.WriteLine($"文件系统服务状态检查: 运行状态={isRunning}, 配置启用状态={config.IsEnabled}, 记录运行状态={config.IsRunning}");
-                    
-                    // 修复状态不一致的情况
-                    if (config.IsEnabled)
-                    {
-                        // 如果配置为启用但未运行，尝试启动
-                        if (!isRunning)
-                        {
-                            Debug.WriteLine("文件系统服务配置为启用但未运行，尝试启动...");
-                            bool started = await mcpService.StartServerAsync("filesystem");
-                            Debug.WriteLine($"文件系统服务启动结果: {started}");
-                            
-                            // 如果启动成功，更新UI
-                            if (started)
-                            {
-                                var dev2Toggle = this.FindControl<ToggleSwitch>("Dev2Toggle");
-                                if (dev2Toggle != null)
-                                {
-                                    dev2Toggle.Content = "已启用 - 验证中";
-                                    Debug.WriteLine("更新UI开关状态: 已启用 - 验证中");
-                                }
-                                
-                                // 触发验证
-                                var result = await mcpService.ValidateServerAsync("filesystem", config);
-                                
-                                // 更新UI显示验证结果
-                                if (dev2Toggle != null)
-                                {
-                                    dev2Toggle.Content = result.IsAvailable ? "已启用 - 可用" : "已启用 - 验证失败";
-                                    Debug.WriteLine($"更新UI开关状态: {dev2Toggle.Content}");
-                                }
-                            }
-                        }
-                        else if (!config.IsRunning) 
-                        {
-                            // 如果实际在运行但状态记录不正确，修复状态
-                            Debug.WriteLine("文件系统服务实际运行中但状态记录不正确，修复状态...");
-                            config.IsRunning = true;
-                            await mcpService.SaveConfigsAsync(configs);
-                            
-                            // 更新UI
-                            var dev2Toggle = this.FindControl<ToggleSwitch>("Dev2Toggle");
-                            if (dev2Toggle != null)
-                            {
-                                dev2Toggle.Content = "已启用 - 可用";
-                                Debug.WriteLine("更新UI开关状态: 已启用 - 可用");
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // 如果配置为禁用但实际在运行，停止服务
-                        if (isRunning)
-                        {
-                            Debug.WriteLine("文件系统服务配置为禁用但实际在运行，停止服务...");
-                            await mcpService.StopServerAsync("filesystem");
-                        }
-                    }
-                }
-            }
-            
-            Debug.WriteLine("MCP工具管理器初始化成功");
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"MCP工具管理器初始化失败: {ex.Message}");
-        }
-    }
 
-    /// <summary>
-    /// 初始化MCP状态监控
-    /// </summary>
-    private void InitializeMcpStatusMonitoring()
-    {
-        try
-        {
-            // 订阅MCP服务状态变化事件
-            if (App.McpServiceMonitor != null)
-            {
-                App.McpServiceMonitor.StatusChanged += OnMcpStatusChanged;
-                Debug.WriteLine("MCP状态监控事件已订阅");
-
-                // 立即更新一次状态显示
-                UpdateMcpStatusDisplay(App.McpServiceMonitor.CurrentStatus);
-            }
-            else
-            {
-                Debug.WriteLine("MCP服务监控未初始化，将显示默认状态");
-                UpdateMcpStatusDisplay(null);
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"初始化MCP状态监控失败: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// MCP状态变化事件处理
-    /// </summary>
-    private void OnMcpStatusChanged(object? sender, McpServiceStatusInfo statusInfo)
-    {
-        // 在UI线程中更新状态显示
-        Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            UpdateMcpStatusDisplay(statusInfo);
-        });
-    }
-
-    /// <summary>
-    /// 更新MCP状态显示
-    /// </summary>
-    private void UpdateMcpStatusDisplay(McpServiceStatusInfo? statusInfo)
-    {
-        try
-        {
-            var statusIcon = this.FindControl<Border>("McpStatusIcon");
-            var statusText = this.FindControl<TextBlock>("McpStatusText");
-            var tooltipTitle = this.FindControl<TextBlock>("McpTooltipTitle");
-            var tooltipDetails = this.FindControl<TextBlock>("McpTooltipDetails");
-
-            if (statusIcon == null || statusText == null) return;
-
-            if (statusInfo == null)
-            {
-                // 默认状态
-                statusIcon.Classes.Clear();
-                statusIcon.Classes.Add("error");
-                statusText.Text = "MCP未初始化";
-
-                if (tooltipDetails != null)
-                {
-                    tooltipDetails.Text = "MCP服务尚未初始化或初始化失败";
-                }
-                return;
-            }
-
-            // 清除所有状态类
-            statusIcon.Classes.Clear();
-
-            // 根据状态设置图标样式和文本
-            switch (statusInfo.Status)
-            {
-                case McpServiceStatus.Running:
-                    statusIcon.Classes.Add("running");
-                    statusText.Text = $"MCP运行中 ({statusInfo.RunningServers}/{statusInfo.TotalServers})";
-                    break;
-
-                case McpServiceStatus.PartiallyAvailable:
-                    statusIcon.Classes.Add("partial");
-                    statusText.Text = $"MCP部分可用 ({statusInfo.RunningServers}/{statusInfo.TotalServers})";
-                    break;
-
-                case McpServiceStatus.Initializing:
-                    statusIcon.Classes.Add("initializing");
-                    statusText.Text = "MCP初始化中...";
-                    break;
-
-                case McpServiceStatus.Unavailable:
-                    statusIcon.Classes.Add("error");
-                    statusText.Text = "MCP不可用";
-                    break;
-
-                case McpServiceStatus.Error:
-                    statusIcon.Classes.Add("error");
-                    statusText.Text = "MCP错误";
-                    break;
-
-                default:
-                    statusIcon.Classes.Add("error");
-                    statusText.Text = "MCP未知状态";
-                    break;
-            }
-
-            // 更新工具提示详细信息
-            if (tooltipDetails != null)
-            {
-                var details = new List<string>();
-                details.Add($"状态: {statusInfo.StatusMessage}");
-                details.Add($"服务器: {statusInfo.RunningServers}/{statusInfo.TotalServers}");
-                details.Add($"可用工具: {statusInfo.AvailableTools}");
-                details.Add($"更新时间: {statusInfo.LastUpdated:HH:mm:ss}");
-
-                if (!string.IsNullOrEmpty(statusInfo.ErrorMessage))
-                {
-                    details.Add($"错误: {statusInfo.ErrorMessage}");
-                }
-
-                tooltipDetails.Text = string.Join("\n", details);
-            }
-
-            Debug.WriteLine($"MCP状态显示已更新: {statusInfo.Status} - {statusInfo.StatusMessage}");
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"更新MCP状态显示失败: {ex.Message}");
-        }
-    }
-    
-    /// <summary>
-    /// 工具调用状态变化处理
-    /// </summary>
-    private void OnToolCallStatusChanged(object? sender, ToolCallStatusEventArgs e)
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            Debug.WriteLine($"工具调用状态: {e.Status} - {e.ToolName} ({e.ServerName}): {e.Message}");
-            
-            // 可以在这里添加UI状态更新，比如显示工具调用进度
-        });
-    }
-
-    /// <summary>
-    /// 工具调用执行开始事件处理
-    /// </summary>
-    private void OnToolCallExecutionStarted(object? sender, ToolCallExecutionEventArgs e)
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            var toolName = e.Execution.LlmToolCall.Function?.Name ?? "未知工具";
-            Debug.WriteLine($"工具调用开始: {toolName}");
-        });
-    }
-
-    /// <summary>
-    /// 工具调用执行完成事件处理
-    /// </summary>
-    private void OnToolCallExecutionCompleted(object? sender, ToolCallExecutionEventArgs e)
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            var toolName = e.Execution.LlmToolCall.Function?.Name ?? "未知工具";
-            Debug.WriteLine($"工具调用完成: {toolName}");
-        });
-    }
-
-    /// <summary>
-    /// 工具调用执行失败事件处理
-    /// </summary>
-    private void OnToolCallExecutionFailed(object? sender, ToolCallExecutionEventArgs e)
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            var toolName = e.Execution.LlmToolCall.Function?.Name ?? "未知工具";
-            var error = e.Execution.ErrorMessage ?? "未知错误";
-            Debug.WriteLine($"工具调用失败: {toolName} - {error}");
-        });
-    }
 
     #region TTS功能
     

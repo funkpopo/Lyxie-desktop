@@ -14,6 +14,7 @@ using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Lyxie_desktop.Interfaces;
+using System.Diagnostics;
 
 namespace Lyxie_desktop;
 
@@ -30,9 +31,6 @@ public partial class App : Application
 
     // 全局MCP服务器管理实例
     public static IMcpServerManager? McpServerManager { get; private set; }
-
-    // 全局MCP自动验证服务实例
-    public static IMcpAutoValidationService? McpAutoValidationService { get; private set; }
 
     // 全局MCP服务监控实例
     public static IMcpServiceMonitor? McpServiceMonitor { get; private set; }
@@ -146,18 +144,15 @@ public partial class App : Application
         // 停止MCP服务
         try
         {
-            System.Diagnostics.Debug.WriteLine("正在关闭MCP服务...");
+            Debug.WriteLine("正在关闭MCP服务...");
 
             // 停止服务监控
             if (McpServiceMonitor != null)
             {
                 await McpServiceMonitor.StopMonitoringAsync();
                 McpServiceMonitor.Dispose();
-                System.Diagnostics.Debug.WriteLine("MCP服务监控已停止");
+                Debug.WriteLine("MCP服务监控已停止");
             }
-
-            // 停止自动验证
-            await McpService.StopAutoValidationAsync();
 
             // 停止所有服务器
             await McpService.StopAllServersAsync();
@@ -183,7 +178,7 @@ public partial class App : Application
             // 释放MCP服务资源
             (McpService as IDisposable)?.Dispose();
 
-            System.Diagnostics.Debug.WriteLine("MCP服务已停止并释放资源");
+            Debug.WriteLine("MCP服务已停止并释放资源");
         }
         catch (Exception ex)
         {
@@ -252,7 +247,7 @@ public partial class App : Application
         try
         {
             await ChatDataHelper.InitializeDatabaseAsync();
-            System.Diagnostics.Debug.WriteLine("聊天数据库初始化成功");
+            Debug.WriteLine("聊天数据库初始化成功");
         }
         catch (Exception ex)
         {
@@ -263,102 +258,33 @@ public partial class App : Application
     // 初始化MCP服务
     private async void InitializeMcpServices()
     {
-        const int maxRetries = 3;
-        const int retryDelayMs = 2000;
-
-        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        try
         {
-            try
-            {
-                System.Diagnostics.Debug.WriteLine($"正在启动MCP服务... (尝试 {attempt}/{maxRetries})");
+            // 确保MCP配置文件存在
+            await ConfigureMcpServersAsync();
+            
+            // 启动所有配置为启用的服务器
+            await StartMcpServersAsync();
 
-                // 1. 初始化工具调用日志服务
-                ToolCallLogger = new ToolCallLogger();
-                System.Diagnostics.Debug.WriteLine("工具调用日志服务已初始化");
-
-                // 2. 获取并配置MCP服务器
-                await ConfigureMcpServersAsync();
-
-                // 3. 启动MCP服务器
-                var startResults = await StartMcpServersAsync();
-
-                // 4. 启动自动验证服务
-                await StartAutoValidationAsync();
-
-                // 5. 初始化服务监控
-                await InitializeServiceMonitoringAsync();
-
-                System.Diagnostics.Debug.WriteLine("MCP服务初始化完成");
-                return; // 成功完成，退出重试循环
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"MCP服务初始化失败 (尝试 {attempt}/{maxRetries}): {ex.Message}");
-
-                if (attempt == maxRetries)
-                {
-                    // 最后一次尝试失败，记录错误但不阻止应用启动
-                    Console.WriteLine($"Failed to initialize MCP services after {maxRetries} attempts: {ex.Message}");
-
-                    // 创建一个错误状态的监控服务
-                    try
-                    {
-                        McpServerManager = McpService.ServerManager;
-                        var toolManager = new McpToolManager(McpService, McpServerManager);
-                        McpServiceMonitor = new McpServiceMonitor(McpService, toolManager);
-                        McpServiceMonitor.ResetStatus();
-                    }
-                    catch
-                    {
-                        // 忽略监控服务创建失败
-                    }
-
-                    return;
-                }
-
-                // 等待后重试
-                await Task.Delay(retryDelayMs * attempt);
-            }
+            // 初始化并启动服务监控
+            await InitializeServiceMonitoringAsync();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"MCP服务初始化失败: {ex.Message}");
         }
     }
 
     /// <summary>
     /// 配置MCP服务器
     /// </summary>
-    private async Task ConfigureMcpServersAsync()
+    private Task ConfigureMcpServersAsync()
     {
-        System.Diagnostics.Debug.WriteLine("正在配置MCP服务器...");
-
-        var configs = await McpService.GetConfigsAsync();
-
-        // 确保filesystem服务器配置存在
-        if (!configs.ContainsKey("filesystem"))
-        {
-            configs["filesystem"] = new Models.McpServerDefinition
-            {
-                Command = "npx",
-                Args = new List<string> { "-y", "@modelcontextprotocol/server-filesystem", "D:\\Projects" },
-                IsEnabled = true, // 默认启用filesystem服务器
-                AutoValidationEnabled = false,
-                ValidationInterval = 60
-            };
-            await McpService.SaveConfigsAsync(configs);
-            System.Diagnostics.Debug.WriteLine("已创建MCP filesystem服务默认配置（默认启用）");
-        }
-        else
-        {
-            // 如果配置已存在，保持当前启用状态，但确保至少有一次是启用的
-            if (!configs["filesystem"].IsEnabled)
-            {
-                configs["filesystem"].IsEnabled = true;
-                await McpService.SaveConfigsAsync(configs);
-                System.Diagnostics.Debug.WriteLine("已启用MCP filesystem服务");
-            }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine($"MCP filesystem服务配置已存在，启用状态={configs["filesystem"].IsEnabled}");
-            }
-        }
+        Debug.WriteLine("正在配置MCP服务器... 用户自定义配置，跳过自动生成。");
+        // 根据用户反馈，所有MCP配置均由用户自定义。
+        // 此处不再自动生成或修改任何配置。
+        // 用户需要自行管理 mcp_settings.json 文件。
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -366,59 +292,20 @@ public partial class App : Application
     /// </summary>
     private async Task<Dictionary<string, bool>> StartMcpServersAsync()
     {
-        System.Diagnostics.Debug.WriteLine("正在启动MCP服务器...");
-
-        var startResults = await McpService.StartAllServersAsync();
-        var successCount = startResults.Count(r => r.Value);
-        var totalCount = startResults.Count;
-
-        System.Diagnostics.Debug.WriteLine($"MCP服务器启动完成: {successCount}/{totalCount} 个服务器启动成功");
-
-        // 记录详细的启动结果
-        foreach (var result in startResults)
+        try
         {
-            var status = result.Value ? "成功" : "失败";
-            System.Diagnostics.Debug.WriteLine($"  - {result.Key}: {status}");
-        }
-
-        if (successCount == 0 && totalCount > 0)
-        {
-            throw new InvalidOperationException("所有MCP服务器启动失败");
-        }
-
-        return startResults;
-    }
-
-    /// <summary>
-    /// 启动自动验证服务
-    /// </summary>
-    private async Task StartAutoValidationAsync()
-    {
-        System.Diagnostics.Debug.WriteLine("正在启动MCP自动验证服务...");
-
-        // 从 McpService 获取服务实例
-        McpServerManager = McpService.ServerManager;
-        McpAutoValidationService = McpService.AutoValidationService;
-
-        // 启动自动验证
-        await McpService.StartAutoValidationAsync();
-        System.Diagnostics.Debug.WriteLine("MCP自动验证已启动");
-
-        // 异步启动自动验证服务并更新配置
-        _ = Task.Run(async () =>
-        {
-            try
+            var results = await McpService.StartAllServersAsync();
+            foreach (var result in results)
             {
-                await McpAutoValidationService.StartAsync();
-                var configs = await McpService.GetConfigsAsync();
-                await McpAutoValidationService.UpdateConfigurationAsync(configs);
-                System.Diagnostics.Debug.WriteLine("MCP自动验证服务配置已更新");
+                Debug.WriteLine($"MCP服务 '{result.Key}' 启动 {(result.Value ? "成功" : "失败")}");
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"启动自动验证服务异常: {ex.Message}");
-            }
-        });
+            return results;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"启动MCP服务器时发生错误: {ex.Message}");
+            return new Dictionary<string, bool>();
+        }
     }
 
     /// <summary>
@@ -426,7 +313,7 @@ public partial class App : Application
     /// </summary>
     private async Task InitializeServiceMonitoringAsync()
     {
-        System.Diagnostics.Debug.WriteLine("正在初始化MCP服务监控...");
+        Debug.WriteLine("正在初始化MCP服务监控...");
 
         try
         {
@@ -437,32 +324,32 @@ public partial class App : Application
             if (ToolCallLogger != null)
             {
                 ToolSelectionOptimizer = new ToolSelectionOptimizer(ToolCallLogger);
-                System.Diagnostics.Debug.WriteLine("工具选择优化器已初始化");
+                Debug.WriteLine("工具选择优化器已初始化");
             }
 
             // 初始化对话上下文管理器
             ConversationContextManager = new ConversationContextManager();
-            System.Diagnostics.Debug.WriteLine("对话上下文管理器已初始化");
+            Debug.WriteLine("对话上下文管理器已初始化");
 
             // 初始化工具调用链管理器
             ToolCallChainManager = new ToolCallChainManager();
-            System.Diagnostics.Debug.WriteLine("工具调用链管理器已初始化");
+            Debug.WriteLine("工具调用链管理器已初始化");
 
             // 初始化错误处理管理器
             ErrorHandlingManager = new ErrorHandlingManager();
-            System.Diagnostics.Debug.WriteLine("错误处理管理器已初始化");
+            Debug.WriteLine("错误处理管理器已初始化");
 
             // 初始化并行执行管理器
             ParallelExecutionManager = new ParallelExecutionManager(maxConcurrency: 5, maxQueueSize: 100);
-            System.Diagnostics.Debug.WriteLine("并行执行管理器已初始化");
+            Debug.WriteLine("并行执行管理器已初始化");
 
             // 启动监控
             await McpServiceMonitor.StartMonitoringAsync();
-            System.Diagnostics.Debug.WriteLine("MCP服务监控已启动");
+            Debug.WriteLine("MCP服务监控已启动");
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"初始化服务监控失败: {ex.Message}");
+            Debug.WriteLine($"初始化服务监控失败: {ex.Message}");
             throw;
         }
     }

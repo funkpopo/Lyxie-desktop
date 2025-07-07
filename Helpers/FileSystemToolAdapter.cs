@@ -118,18 +118,5 @@ namespace Lyxie_desktop.Helpers
             Debug.WriteLine($"已创建 {tools.Count} 个预定义文件系统工具");
             return tools;
         }
-        
-        /// <summary>
-        /// 检查服务器名称是否为文件系统服务器
-        /// </summary>
-        public static bool IsFileSystemServer(string serverName)
-        {
-            bool isFileSystemServer = serverName.ToLower().Contains("filesystem") || 
-                   serverName.ToLower().Contains("file") ||
-                   serverName.ToLower().Contains("mcp-filesystem");
-            
-            Debug.WriteLine($"检查服务器名称 '{serverName}' 是否为文件系统服务器: {isFileSystemServer}");
-            return isFileSystemServer;
-        }
     }
 } 

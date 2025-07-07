@@ -86,14 +86,6 @@
                 </Border.Styles>
             </Border>
 
-            <!-- 状态文本 -->
-            <TextBlock Name="McpStatusText"
-                       Text="MCP未初始化"
-                       FontSize="12"
-                       Foreground="{DynamicResource TextBrush}"
-                       VerticalAlignment="Center"
-                       Opacity="0.8"/>
-
             <!-- 工具提示 -->
             <StackPanel.Styles>
                 <Style Selector="StackPanel">

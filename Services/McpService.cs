@@ -11,137 +11,37 @@ namespace Lyxie_desktop.Services
 {
     public class McpService : IMcpService, IDisposable
     {
-        private readonly McpValidationService _validationService;
         private readonly IMcpServerManager _serverManager;
-        private readonly IMcpAutoValidationService _autoValidationService;
+        private readonly IMcpToolManager _toolManager;
 
         public McpService()
         {
             _serverManager = new McpServerManager();
-            _validationService = new McpValidationService(_serverManager);
-            _autoValidationService = new McpAutoValidationService(_serverManager);
+            _toolManager = new McpToolManager(this, _serverManager);
         }
 
         /// <summary>
-        /// 自动验证是否正在运行
-        /// </summary>
-        public bool IsAutoValidationRunning => _autoValidationService.IsRunning;
-
-        /// <summary>
-        /// 获取自动验证服务实例
-        /// </summary>
-        public IMcpAutoValidationService AutoValidationService => _autoValidationService;
-
-        /// <summary>
-        /// 获取服务器管理器实例
+        /// Gets the server manager instance.
         /// </summary>
         public IMcpServerManager ServerManager => _serverManager;
+        
+        public IMcpToolManager ToolManager => _toolManager;
 
         public Task<Dictionary<string, McpServerDefinition>> GetConfigsAsync()
         {
             return McpConfigHelper.LoadConfigsAsync();
         }
 
+        /// <summary>
+        /// Saves the server configurations.
+        /// </summary>
         public async Task SaveConfigsAsync(Dictionary<string, McpServerDefinition> configs)
         {
             await McpConfigHelper.SaveConfigsAsync(configs);
-            
-            // 更新自动验证配置
-            await _autoValidationService.UpdateConfigurationAsync(configs);
         }
 
         /// <summary>
-        /// 验证单个MCP服务器的可用性
-        /// </summary>
-        /// <param name="name">服务器名称</param>
-        /// <param name="definition">服务器定义</param>
-        /// <param name="cancellationToken">取消令牌</param>
-        /// <returns>验证结果</returns>
-        public async Task<McpValidationResult> ValidateServerAsync(string name, McpServerDefinition definition, CancellationToken cancellationToken = default)
-        {
-            var result = await _validationService.ValidateServerAsync(name, definition, cancellationToken);
-            
-            // 更新服务器定义的状态
-            definition.IsAvailable = result.IsAvailable;
-            definition.ValidationStatus = result.Status;
-            definition.ErrorMessage = result.ErrorMessage;
-            definition.LastChecked = result.ValidatedAt;
-
-            return result;
-        }
-
-        /// <summary>
-        /// 验证所有MCP服务器的可用性
-        /// </summary>
-        /// <param name="cancellationToken">取消令牌</param>
-        /// <returns>验证结果字典</returns>
-        public async Task<Dictionary<string, McpValidationResult>> ValidateAllServersAsync(CancellationToken cancellationToken = default)
-        {
-            var configs = await GetConfigsAsync();
-            var results = await _validationService.ValidateServersAsync(configs, cancellationToken);
-
-            // 更新配置状态
-            foreach (var result in results)
-            {
-                if (configs.TryGetValue(result.Key, out var definition))
-                {
-                    definition.IsAvailable = result.Value.IsAvailable;
-                    definition.ValidationStatus = result.Value.Status;
-                    definition.ErrorMessage = result.Value.ErrorMessage;
-                    definition.LastChecked = result.Value.ValidatedAt;
-                }
-            }
-
-            // 保存更新后的配置
-            await SaveConfigsAsync(configs);
-
-            return results;
-        }
-
-        /// <summary>
-        /// 获取服务器验证状态摘要
-        /// </summary>
-        /// <returns>状态摘要</returns>
-        public async Task<McpValidationSummary> GetValidationSummaryAsync()
-        {
-            var configs = await GetConfigsAsync();
-            var summary = new McpValidationSummary();
-
-            foreach (var config in configs.Values)
-            {
-                summary.TotalCount++;
-                
-                if (config.IsEnabled)
-                {
-                    summary.EnabledCount++;
-                    
-                    switch (config.ValidationStatus)
-                    {
-                        case McpValidationStatus.Available:
-                            summary.AvailableCount++;
-                            break;
-                        case McpValidationStatus.Unavailable:
-                        case McpValidationStatus.Timeout:
-                        case McpValidationStatus.ConfigurationError:
-                            summary.UnavailableCount++;
-                            break;
-                        case McpValidationStatus.Unknown:
-                        case McpValidationStatus.Validating:
-                            summary.UnknownCount++;
-                            break;
-                    }
-                }
-                else
-                {
-                    summary.DisabledCount++;
-                }
-            }
-
-            return summary;
-        }
-
-        /// <summary>
-        /// 启动指定的MCP服务器
+        /// Starts a specific MCP server.
         /// </summary>
         public async Task<bool> StartServerAsync(string name, CancellationToken cancellationToken = default)
         {
@@ -154,92 +54,53 @@ namespace Lyxie_desktop.Services
         }
 
         /// <summary>
-        /// 启动指定的MCP服务器并立即验证
+        /// Stops a specific MCP server.
         /// </summary>
-        /// <param name="name">服务器名称</param>
-        /// <param name="cancellationToken">取消令牌</param>
-        /// <returns>启动并验证的结果</returns>
-        public async Task<(bool Started, McpValidationResult? ValidationResult)> StartServerWithValidationAsync(string name, CancellationToken cancellationToken = default)
-        {
-            var configs = await GetConfigsAsync();
-            if (!configs.TryGetValue(name, out var definition))
-            {
-                return (false, null);
-            }
-
-            // 启动服务器
-            var started = await _serverManager.StartServerAsync(name, definition, cancellationToken);
-            if (!started)
-            {
-                return (false, null);
-            }
-
-            // 更新配置状态
-            definition.IsEnabled = true;
-            await SaveConfigsAsync(configs);
-
-            // 立即验证
-            var validationResult = await ValidateServerAsync(name, definition, cancellationToken);
-            
-            return (true, validationResult);
-        }
-
-        /// <summary>
-        /// 停止指定的MCP服务器
-        /// </summary>
+        /// <param name="name">The name of the server.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>True if the server was stopped successfully, otherwise false.</returns>
         public async Task<bool> StopServerAsync(string name, CancellationToken cancellationToken = default)
         {
             return await _serverManager.StopServerAsync(name, cancellationToken);
         }
 
         /// <summary>
-        /// 启动所有已启用的MCP服务器
+        /// Starts all enabled MCP servers.
         /// </summary>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>A dictionary containing the server names and their start-up result.</returns>
         public async Task<Dictionary<string, bool>> StartAllServersAsync(CancellationToken cancellationToken = default)
         {
             var configs = await GetConfigsAsync();
-            return await _serverManager.StartAllServersAsync(configs, cancellationToken);
+            var enabledConfigs = configs.Where(c => c.Value.IsEnabled)
+                                        .ToDictionary(c => c.Key, c => c.Value);
+            return await _serverManager.StartAllServersAsync(enabledConfigs, cancellationToken);
         }
 
         /// <summary>
-        /// 停止所有正在运行的MCP服务器
+        /// Stops all running MCP servers.
         /// </summary>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>A dictionary containing the server names and their stop result.</returns>
         public async Task<Dictionary<string, bool>> StopAllServersAsync(CancellationToken cancellationToken = default)
         {
             return await _serverManager.StopAllServersAsync(cancellationToken);
         }
 
         /// <summary>
-        /// 启动自动验证
+        /// Gets the names of all currently running servers.
         /// </summary>
-        public async Task StartAutoValidationAsync(CancellationToken cancellationToken = default)
-        {
-            var configs = await GetConfigsAsync();
-            await _autoValidationService.UpdateConfigurationAsync(configs);
-            await _autoValidationService.StartAsync(cancellationToken);
-        }
-
-        /// <summary>
-        /// 停止自动验证
-        /// </summary>
-        public async Task StopAutoValidationAsync(CancellationToken cancellationToken = default)
-        {
-            await _autoValidationService.StopAsync(cancellationToken);
-        }
-
-        /// <summary>
-        /// 获取正在运行的服务器列表
-        /// </summary>
+        /// <returns>A collection of server names.</returns>
         public IEnumerable<string> GetRunningServers()
         {
             return _serverManager.GetRunningServers();
         }
 
         /// <summary>
-        /// 检查指定服务器是否正在运行
+        /// Checks if a specific server is currently running.
         /// </summary>
-        /// <param name="name">服务器名称</param>
-        /// <returns>是否正在运行</returns>
+        /// <param name="name">The name of the server.</param>
+        /// <returns>True if the server is running, otherwise false.</returns>
         public bool IsServerRunning(string name)
         {
             return _serverManager.IsServerRunning(name);
@@ -247,21 +108,9 @@ namespace Lyxie_desktop.Services
 
         public void Dispose()
         {
-            // The dispose methods on the services might not exist.
-            // Let's cast to IDisposable to be safe.
-            if (_validationService is IDisposable validationDisposable)
+            if (_serverManager is IDisposable disposable)
             {
-                validationDisposable.Dispose();
-            }
-
-            if (_serverManager is IDisposable serverManagerDisposable)
-            {
-                serverManagerDisposable.Dispose();
-            }
-
-            if (_autoValidationService is IDisposable autoValidationDisposable)
-            {
-                autoValidationDisposable.Dispose();
+                disposable.Dispose();
             }
         }
     }

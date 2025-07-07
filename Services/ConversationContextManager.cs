@@ -22,7 +22,7 @@ namespace Lyxie_desktop.Services
         private ConversationState _currentState;
         private readonly Dictionary<string, object> _contextMetadata;
 
-        public ConversationContextManager(int maxTokens = 8000, int maxMessages = 50, double compressionRatio = 0.7)
+        public ConversationContextManager(int maxTokens = 128000, int maxMessages = 50, double compressionRatio = 0.7)
         {
             _maxTokens = maxTokens;
             _maxMessages = maxMessages;

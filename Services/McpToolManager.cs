@@ -56,100 +56,6 @@ namespace Lyxie_desktop.Services
                 kvp.Value.IsEnabled).ToList();
             
             Debug.WriteLine($"找到 {enabledServers.Count} 个启用的服务器");
-            
-            // 特别检查filesystem服务器
-            var filesystemServer = enabledServers.FirstOrDefault(s => 
-                Helpers.FileSystemToolAdapter.IsFileSystemServer(s.Key));
-            
-            if (filesystemServer.Key != null)
-            {
-                Debug.WriteLine($"找到文件系统服务器: {filesystemServer.Key}, 启用状态: {filesystemServer.Value.IsEnabled}");
-                
-                // 直接使用预定义的文件系统工具
-                try
-                {
-                    var filesystemTools = Helpers.FileSystemToolAdapter.GetFileSystemTools(filesystemServer.Key);
-                    allTools.AddRange(filesystemTools);
-                    
-                    // 更新缓存
-                    lock (_cacheLock)
-                    {
-                        _toolsCache[filesystemServer.Key] = filesystemTools;
-                        _lastCacheUpdate = DateTime.Now;
-                    }
-                    
-                    Debug.WriteLine($"已添加 {filesystemTools.Count} 个文件系统工具");
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"获取文件系统工具异常: {ex.Message}");
-                }
-            }
-            else
-            {
-                Debug.WriteLine("未找到启用的文件系统服务器");
-            }
-
-            // 并行获取每个其他服务器的工具
-            var otherServers = enabledServers.Where(s => !Helpers.FileSystemToolAdapter.IsFileSystemServer(s.Key)).ToList();
-            
-            if (otherServers.Count > 0)
-            {
-                Debug.WriteLine($"尝试获取其他 {otherServers.Count} 个服务器的工具");
-                
-                var tasks = otherServers.Select(async server =>
-                {
-                    try
-                    {
-                        if (_serverManager.IsServerRunning(server.Key))
-                        {
-                            var tools = await GetServerToolsAsync(server.Key, cancellationToken);
-                            return new { ServerName = server.Key, Tools = tools };
-                        }
-                        else
-                        {
-                            Debug.WriteLine($"服务器 {server.Key} 未运行");
-                            return new { ServerName = server.Key, Tools = new List<McpTool>() };
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"获取服务器 {server.Key} 的工具列表失败: {ex.Message}");
-                        return new { ServerName = server.Key, Tools = new List<McpTool>() };
-                    }
-                });
-
-                var results = await Task.WhenAll(tasks);
-
-                // 更新缓存并收集所有工具
-                lock (_cacheLock)
-                {
-                    foreach (var result in results)
-                    {
-                        if (result.Tools.Count > 0)
-                        {
-                            _toolsCache[result.ServerName] = result.Tools;
-                            allTools.AddRange(result.Tools);
-                            Debug.WriteLine($"从服务器 {result.ServerName} 获取到 {result.Tools.Count} 个工具");
-                        }
-                    }
-                }
-            }
-
-            // 确保至少返回文件系统工具（如果有）
-            if (allTools.Count == 0 && filesystemServer.Key != null)
-            {
-                Debug.WriteLine("未获取到任何工具，尝试再次获取文件系统工具");
-                var filesystemTools = Helpers.FileSystemToolAdapter.GetFileSystemTools(filesystemServer.Key);
-                allTools.AddRange(filesystemTools);
-                
-                // 更新缓存
-                lock (_cacheLock)
-                {
-                    _toolsCache[filesystemServer.Key] = filesystemTools;
-                    _lastCacheUpdate = DateTime.Now;
-                }
-            }
 
             Debug.WriteLine($"获取到总共 {allTools.Count} 个可用工具，来自 {_toolsCache.Count} 个服务器");
             return allTools;
@@ -161,14 +67,7 @@ namespace Lyxie_desktop.Services
         private async Task<List<McpTool>> GetServerToolsAsync(string serverName, CancellationToken cancellationToken)
         {
             try
-            {
-                // 对于文件系统服务器，使用预定义的工具列表
-                if (Helpers.FileSystemToolAdapter.IsFileSystemServer(serverName))
-                {
-                    Debug.WriteLine($"使用预定义的文件系统工具列表，服务器: {serverName}");
-                    return Helpers.FileSystemToolAdapter.GetFileSystemTools(serverName);
-                }
-            
+            {            
                 // 检查服务器是否在运行
                 if (!_serverManager.IsServerRunning(serverName))
                 {

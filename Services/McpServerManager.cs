@@ -550,33 +550,6 @@ namespace Lyxie_desktop.Services
                 Debug.WriteLine($"方法2 - 服务器 {name} 无有效PID记录");
             }
 
-            // 方法3：特殊处理文件系统服务器，通过进程名查找
-            if (name.Equals("filesystem", StringComparison.OrdinalIgnoreCase) ||
-                Helpers.FileSystemToolAdapter.IsFileSystemServer(name))
-            {
-                if (!string.IsNullOrEmpty(definition.Command))
-                {
-                    Debug.WriteLine($"方法3 - 尝试通过命令名检查文件系统服务器: {definition.Command}");
-                    bool isExternalRunning = IsExternalProcessRunning(definition.Command, definition.Args);
-
-                    if (isExternalRunning)
-                    {
-                        Debug.WriteLine($"方法3 - 发现外部运行的文件系统服务进程");
-                        definition.IsRunning = true;
-                        Debug.WriteLine($"=== 服务器 {name} 通过外部进程检查确认运行中 ===");
-                        return true;
-                    }
-                    else
-                    {
-                        Debug.WriteLine($"方法3 - 未发现外部运行的文件系统服务进程");
-                    }
-                }
-                else
-                {
-                    Debug.WriteLine($"方法3 - 文件系统服务器命令为空，跳过外部进程检查");
-                }
-            }
-
             // 如果到这里还未确认运行，则服务未运行
             Debug.WriteLine($"=== 服务器 {name} 所有检查方法均未确认运行，标记为未运行 ===");
             definition.IsRunning = false;
@@ -727,7 +700,12 @@ namespace Lyxie_desktop.Services
                         Debug.WriteLine($"进程ID匹配，更新服务器 {name} 状态为未运行");
                         definition.IsRunning = false;
                         definition.ProcessId = null;
-                        definition.ErrorMessage = $"进程退出，退出码: {process.ExitCode}";
+                        
+                        // 如果 stderr 中没有更具体的错误信息，则使用通用的退出代码消息
+                        if (string.IsNullOrEmpty(definition.ErrorMessage))
+                        {
+                            definition.ErrorMessage = $"进程退出，退出码: {process.ExitCode}";
+                        }
                     }
                     else
                     {
@@ -796,6 +774,15 @@ namespace Lyxie_desktop.Services
             if (data != null)
             {
                 Debug.WriteLine($"[MCP-{serverName}-STDERR] {data}");
+                
+                if (_serverDefinitions.TryGetValue(serverName, out var definition))
+                {
+                    // 捕获第一个非空的错误信息作为主要错误原因
+                    if (string.IsNullOrEmpty(definition.ErrorMessage))
+                    {
+                        definition.ErrorMessage = data;
+                    }
+                }
             }
         }
 

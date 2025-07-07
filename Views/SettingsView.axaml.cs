@@ -28,28 +28,22 @@ namespace Lyxie_desktop.Views
 {
 
     // ViewModel for MCP Service Item
-    public class McpServiceViewModel : INotifyPropertyChanged
+    public class McpServiceViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly Func<Task> _saveAction;
         private readonly IMcpService _mcpService;
-        private readonly IMcpAutoValidationService _autoValidationService;
         private string _name;
         private McpServerDefinition _definition;
         private bool _isLoading;
         private string _operationStatus = "";
 
-        public McpServiceViewModel(string name, McpServerDefinition definition, Func<Task> saveAction, IMcpService mcpService, IMcpAutoValidationService autoValidationService)
+        public McpServiceViewModel(string name, McpServerDefinition definition, Func<Task> saveAction, IMcpService mcpService)
         {
             _name = name;
             _definition = definition;
             _saveAction = saveAction;
             _mcpService = mcpService ?? throw new ArgumentNullException(nameof(mcpService));
-            _autoValidationService = autoValidationService ?? throw new ArgumentNullException(nameof(autoValidationService));
             
-            // 订阅验证完成事件
-            _autoValidationService.ValidationCompleted += OnValidationCompleted;
-            
-            // 初始化时同步一次运行状态
             SyncServerRunningState();
         }
 
@@ -85,10 +79,7 @@ namespace Lyxie_desktop.Views
                 if (SetField(ref _definition, value))
                 {
                     OnPropertyChanged(nameof(StatusText));
-                    OnPropertyChanged(nameof(IsAvailable));
-                    OnPropertyChanged(nameof(ValidationStatusText));
-                    OnPropertyChanged(nameof(ErrorMessage));
-                    OnPropertyChanged(nameof(LastCheckedText));
+                    OnPropertyChanged(nameof(IsRunning));
                 }
             }
         }
@@ -99,79 +90,11 @@ namespace Lyxie_desktop.Views
             {
                 if (IsLoading) return OperationStatus;
                 if (!IsEnabled) return "已禁用";
-                
-                // 优先显示验证状态，如果验证结果明确则显示验证结果
-                switch (Definition.ValidationStatus)
-                {
-                    case McpValidationStatus.Available:
-                        return "可用";
-                    case McpValidationStatus.Unavailable:
-                        return "不可用";
-                    case McpValidationStatus.Validating:
-                        return "验证中...";
-                    case McpValidationStatus.Timeout:
-                        return "超时";
-                    case McpValidationStatus.ConfigurationError:
-                        return "配置错误";
-                    case McpValidationStatus.Unknown:
-                        // 只有在验证状态为未知时才检查运行状态
-                        if (Definition.IsStdioServer)
-                        {
-                            // 重新检查实际运行状态
-                            var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
-                            if (isActuallyRunning)
-                            {
-                                // 如果进程实际在运行但验证状态未知，触发验证
-                                _ = Task.Run(async () => await TriggerValidationAsync());
-                                return "检查中...";
-                            }
-                            return Definition.IsRunning ? "运行中" : "已停止";
-                        }
-                        return Definition.IsHttpServer && Definition.IsRunning ? "运行中" : "未验证";
-                    default:
-                        return "未知";
-                }
+                return "";
             }
         }
 
-        public bool IsAvailable => IsEnabled && Definition.IsAvailable;
-
-        public string ValidationStatusText
-        {
-            get
-            {
-                if (IsLoading) return "";
-                if (!IsEnabled) return "";
-                
-                return Definition.ValidationStatus switch
-                {
-                    McpValidationStatus.Available => "✓ 验证成功",
-                    McpValidationStatus.Unavailable => "✗ 验证失败",
-                    McpValidationStatus.Validating => "⟳ 验证中...",
-                    McpValidationStatus.Timeout => "⏱ 验证超时",
-                    McpValidationStatus.ConfigurationError => "⚠ 配置错误",
-                    McpValidationStatus.Unknown => "? 未验证",
-                    _ => ""
-                };
-            }
-        }
-
-        public string? ErrorMessage => Definition.ErrorMessage;
-
-        public string LastCheckedText
-        {
-            get
-            {
-                if (Definition.LastChecked == null) return "";
-                var timeSpan = DateTime.Now - Definition.LastChecked.Value;
-                if (timeSpan.TotalMinutes < 1) return "刚刚验证";
-                if (timeSpan.TotalHours < 1) return $"{(int)timeSpan.TotalMinutes}分钟前";
-                if (timeSpan.TotalDays < 1) return $"{(int)timeSpan.TotalHours}小时前";
-                return $"{(int)timeSpan.TotalDays}天前";
-            }
-        }
-
-
+        public bool IsRunning => IsEnabled && Definition.IsRunning;
 
         public bool IsEnabled
         {
@@ -205,91 +128,41 @@ namespace Lyxie_desktop.Views
         /// </summary>
         private async Task ToggleServerAsync(bool enable)
         {
-            IsLoading = true;
-            OperationStatus = enable ? "启动中..." : "停止中...";
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                IsLoading = true;
+                OperationStatus = enable ? "启动中..." : "停止中...";
+            });
 
             try
             {
+                Definition.IsEnabled = enable;
+                await _saveAction().ConfigureAwait(false);
+
+                bool success;
                 if (enable)
                 {
-                    // 1. 立即更新状态并保存，反映用户意图
-                    Definition.IsEnabled = true;
-                    OnPropertyChanged(nameof(IsEnabled));
-                    OnPropertyChanged(nameof(StatusText));
-                    await _saveAction().ConfigureAwait(false);
-
-                    // 2. 在后台尝试启动服务
-                    bool success = await _mcpService.StartServerAsync(_name).ConfigureAwait(false);
-                    if (success)
-                    {
-                        var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
-                        Definition.IsRunning = isActuallyRunning;
-                        OperationStatus = "验证中...";
-                        await _mcpService.ValidateServerAsync(_name, Definition).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        Definition.IsRunning = false;
-                        Definition.ErrorMessage = Definition.ErrorMessage ?? "启动失败，请检查配置或日志。";
-                        OperationStatus = "启动失败";
-                        await Task.Delay(2000).ConfigureAwait(false);
-                    }
+                    success = await _mcpService.StartServerAsync(_name).ConfigureAwait(false);
                 }
                 else
                 {
-                    // 停止服务
-                    bool success = await _mcpService.StopServerAsync(_name).ConfigureAwait(false);
-                    if (success)
-                    {
-                        Definition.IsEnabled = false;
-                        Definition.IsAvailable = false;
-                        Definition.ValidationStatus = McpValidationStatus.Unknown;
-                        Definition.ErrorMessage = null;
-                        Definition.IsRunning = false;
-                    }
-                    else
-                    {
-                        OperationStatus = "停止失败";
-                        await Task.Delay(2000).ConfigureAwait(false);
-                    }
-                    
-                    // 确保保存停止后的状态
-                    await _saveAction().ConfigureAwait(false);
+                    success = await _mcpService.StopServerAsync(_name).ConfigureAwait(false);
                 }
                 
-                // 触发属性变更通知
-                Dispatcher.UIThread.Invoke(() =>
-                {
-                    OnPropertyChanged(nameof(IsEnabled));
-                    OnPropertyChanged(nameof(StatusText));
-                    OnPropertyChanged(nameof(IsAvailable));
-                    OnPropertyChanged(nameof(ValidationStatusText));
-                    OnPropertyChanged(nameof(ErrorMessage));
-                });
+                SyncServerRunningState();
             }
             catch (Exception ex)
             {
-                Definition.ErrorMessage = $"操作失败: {ex.Message}";
-                Dispatcher.UIThread.Invoke(() =>
-                {
-                    OperationStatus = "操作失败";
-                    OnPropertyChanged(nameof(ErrorMessage));
-                });
-                
-                await Task.Delay(3000).ConfigureAwait(false);
+                // Log error
+                System.Diagnostics.Debug.WriteLine($"Error toggling server {_name}: {ex.Message}");
+                SyncServerRunningState();
             }
             finally
             {
-                Dispatcher.UIThread.Invoke(() =>
+                await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     IsLoading = false;
-                    OperationStatus = "";
-                    
-                    // 确保UI最终状态一致
-                    OnPropertyChanged(nameof(IsEnabled));
                     OnPropertyChanged(nameof(StatusText));
-                    OnPropertyChanged(nameof(ValidationStatusText));
-                    OnPropertyChanged(nameof(IsAvailable));
                 });
             }
         }
@@ -299,77 +172,10 @@ namespace Lyxie_desktop.Views
         /// </summary>
         private void SyncServerRunningState()
         {
-            try
-            {
-                // 检查服务器实际运行状态
-                var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
-                
-                // 如果实际状态与配置状态不一致，更新配置
-                if (Definition.IsRunning != isActuallyRunning)
-                {
-                    Definition.IsRunning = isActuallyRunning;
-                    
-                    // 如果服务器实际在运行但配置显示未运行，可能是外部启动的
-                    if (isActuallyRunning && !Definition.IsRunning)
-                    {
-                        Definition.IsEnabled = true;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"同步运行状态失败: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 触发验证
-        /// </summary>
-        private async Task TriggerValidationAsync()
-        {
-            try
-            {
-                var result = await _autoValidationService.ValidateServerImmediatelyAsync(_name);
-                if (result != null)
-                {
-                    Dispatcher.UIThread.Invoke(() =>
-                    {
-                        // 强制刷新UI状态
-                        OnPropertyChanged(nameof(StatusText));
-                        OnPropertyChanged(nameof(IsAvailable));
-                        OnPropertyChanged(nameof(ValidationStatusText));
-                        OnPropertyChanged(nameof(ErrorMessage));
-                        OnPropertyChanged(nameof(LastCheckedText));
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"验证失败: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 验证完成事件处理
-        /// </summary>
-        private void OnValidationCompleted(object? sender, (string ServerName, McpValidationResult Result) e)
-        {
-            // 检查是否是当前服务器的验证结果
-            if (e.ServerName != _name)
-                return;
-
-            Dispatcher.UIThread.Invoke(() =>
-            {
-                // 同步服务器实际运行状态
-                SyncServerRunningState();
-                
-                // 更新验证状态
-                OnPropertyChanged(nameof(StatusText));
-                OnPropertyChanged(nameof(IsAvailable));
-                OnPropertyChanged(nameof(ValidationStatusText));
-                OnPropertyChanged(nameof(ErrorMessage));
-                OnPropertyChanged(nameof(LastCheckedText));
-            });
+            var isActuallyRunning = _mcpService.GetRunningServers().Contains(_name);
+            Definition.IsRunning = isActuallyRunning;
+            OnPropertyChanged(nameof(IsRunning));
+            OnPropertyChanged(nameof(StatusText));
         }
 
         /// <summary>
@@ -377,10 +183,7 @@ namespace Lyxie_desktop.Views
         /// </summary>
         public void Dispose()
         {
-            if (_autoValidationService != null)
-            {
-                _autoValidationService.ValidationCompleted -= OnValidationCompleted;
-            }
+            // No-op
         }
     }
 
@@ -520,7 +323,6 @@ namespace Lyxie_desktop.Views
         private readonly LlmApiService _llmApiService;
         private readonly TtsApiService _ttsApiService;
         private readonly IMcpService _mcpService;
-        private readonly IMcpAutoValidationService _mcpAutoValidationService;
 
         public SettingsView()
         {
@@ -528,8 +330,6 @@ namespace Lyxie_desktop.Views
             _llmApiService = new LlmApiService();
             _ttsApiService = new TtsApiService();
             _mcpService = App.McpService;
-            // 获取自动验证服务实例
-            _mcpAutoValidationService = _mcpService.AutoValidationService;
 
             // 设置文件路径
             var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -1537,33 +1337,21 @@ namespace Lyxie_desktop.Views
 
         private async Task LoadMcpServicesAsync()
         {
-            var configs = await McpConfigHelper.LoadConfigsAsync();
-            McpServices.Clear();
-            
-            // 获取当前实际运行的服务器列表
-            var runningServers = _mcpService.GetRunningServers().ToHashSet();
-            
-            foreach (var config in configs)
+            try
             {
-                // 同步实际运行状态
-                if (config.Value.IsStdioServer)
+                var configs = await _mcpService.GetConfigsAsync();
+                McpServices.Clear();
+                foreach (var config in configs)
                 {
-                    var isActuallyRunning = runningServers.Contains(config.Key);
-                    config.Value.IsRunning = isActuallyRunning;
-                    
-                    // 如果实际在运行但配置显示未启用，可能是外部启动的
-                    if (isActuallyRunning && !config.Value.IsEnabled)
-                    {
-                        config.Value.IsEnabled = true;
-                    }
+                    McpServices.Add(new McpServiceViewModel(config.Key, config.Value, SaveMcpChangesAsync, _mcpService));
                 }
                 
-                McpServices.Add(new McpServiceViewModel(config.Key, config.Value, SaveMcpChangesAsync, _mcpService, _mcpAutoValidationService));
+                RaisePropertyChanged(nameof(IsMcpConfigPresent));
             }
-            
-            // 保存同步后的配置
-            await SaveMcpChangesAsync();
-            RaisePropertyChanged(nameof(IsMcpConfigPresent));
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"加载 MCP 服务失败: {ex.Message}");
+            }
         }
 
         private async Task SaveMcpChangesAsync()

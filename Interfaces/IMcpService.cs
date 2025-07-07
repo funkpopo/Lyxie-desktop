@@ -13,28 +13,6 @@ namespace Lyxie_desktop.Interfaces
         Task SaveConfigsAsync(Dictionary<string, McpServerDefinition> configs);
         
         /// <summary>
-        /// 验证单个MCP服务器的可用性
-        /// </summary>
-        /// <param name="name">服务器名称</param>
-        /// <param name="definition">服务器定义</param>
-        /// <param name="cancellationToken">取消令牌</param>
-        /// <returns>验证结果</returns>
-        Task<McpValidationResult> ValidateServerAsync(string name, McpServerDefinition definition, CancellationToken cancellationToken = default);
-        
-        /// <summary>
-        /// 验证所有MCP服务器的可用性
-        /// </summary>
-        /// <param name="cancellationToken">取消令牌</param>
-        /// <returns>验证结果字典</returns>
-        Task<Dictionary<string, McpValidationResult>> ValidateAllServersAsync(CancellationToken cancellationToken = default);
-        
-        /// <summary>
-        /// 获取服务器验证状态摘要
-        /// </summary>
-        /// <returns>状态摘要</returns>
-        Task<McpValidationSummary> GetValidationSummaryAsync();
-        
-        /// <summary>
         /// 启动指定的MCP服务器
         /// </summary>
         /// <param name="name">服务器名称</param>
@@ -65,25 +43,6 @@ namespace Lyxie_desktop.Interfaces
         Task<Dictionary<string, bool>> StopAllServersAsync(CancellationToken cancellationToken = default);
         
         /// <summary>
-        /// 启动自动验证
-        /// </summary>
-        /// <param name="cancellationToken">取消令牌</param>
-        /// <returns>启动任务</returns>
-        Task StartAutoValidationAsync(CancellationToken cancellationToken = default);
-        
-        /// <summary>
-        /// 停止自动验证
-        /// </summary>
-        /// <param name="cancellationToken">取消令牌</param>
-        /// <returns>停止任务</returns>
-        Task StopAutoValidationAsync(CancellationToken cancellationToken = default);
-        
-        /// <summary>
-        /// 自动验证是否正在运行
-        /// </summary>
-        bool IsAutoValidationRunning { get; }
-        
-        /// <summary>
         /// 获取正在运行的服务器列表
         /// </summary>
         /// <returns>正在运行的服务器名称列表</returns>
@@ -97,13 +56,10 @@ namespace Lyxie_desktop.Interfaces
         bool IsServerRunning(string name);
 
         /// <summary>
-        /// 获取自动验证服务实例
-        /// </summary>
-        IMcpAutoValidationService AutoValidationService { get; }
-
-        /// <summary>
         /// 获取服务器管理器实例
         /// </summary>
         IMcpServerManager ServerManager { get; }
+
+        IMcpToolManager ToolManager { get; }
     }
 } 
