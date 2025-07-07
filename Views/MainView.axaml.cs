@@ -12,12 +12,14 @@ using Lyxie_desktop.Controls;
 using Lyxie_desktop.Helpers;
 using Lyxie_desktop.Services;
 using Lyxie_desktop.Interfaces;
+using Lyxie_desktop.Models;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Text.Json;
 using System.Net.Http;
+using System.Diagnostics;
 using System.Text;
 using Newtonsoft.Json.Linq;
 using System.Diagnostics;
@@ -130,20 +132,54 @@ public partial class MainView : UserControl
         
         // 初始化TTS服务
         InitializeTtsService();
-        
+
+        // 初始化MCP服务
+        InitializeMcpServices();
+
         // 初始化聊天历史和侧边栏
         InitializeChatHistory();
     }
     
+    // 初始化MCP服务
+    private void InitializeMcpServices()
+    {
+        try
+        {
+            // 从全局App获取MCP服务实例
+            var mcpService = App.McpService;
+            if (mcpService != null)
+            {
+                _mcpToolManager = mcpService.ToolManager as McpToolManager;
+                if (_mcpToolManager != null)
+                {
+                    _toolCallExecutor = new ToolCallExecutor(_mcpToolManager);
+                    Debug.WriteLine("MCP服务初始化成功");
+                }
+                else
+                {
+                    Debug.WriteLine("MCP工具管理器初始化失败");
+                }
+            }
+            else
+            {
+                Debug.WriteLine("MCP服务未找到");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"MCP服务初始化异常: {ex.Message}");
+        }
+    }
+
     // 初始化工具面板开关状态
-    private async void InitializeToolToggles()
+    private void InitializeToolToggles()
     {
         var ttsToggle = this.FindControl<ToggleSwitch>("TTSToggle");
         var dev1Toggle = this.FindControl<ToggleSwitch>("Dev1Toggle");
-        
+
         if (ttsToggle != null)
             ttsToggle.IsChecked = App.Settings.EnableTTS;
-            
+
         if (dev1Toggle != null)
             dev1Toggle.IsChecked = App.Settings.EnableDev1;
     }
@@ -1919,17 +1955,36 @@ public partial class MainView : UserControl
     /// 处理带工具调用的对话流程
     /// </summary>
     private async Task ProcessConversationWithToolsAsync(
-        LlmApiConfig config, 
-        string userMessage, 
-        StackPanel messageList, 
+        LlmApiConfig config,
+        string userMessage,
+        StackPanel messageList,
         ScrollViewer? messageScrollViewer)
     {
         if (_mcpToolManager == null || _toolCallExecutor == null || _cancellationTokenSource == null)
         {
+            // 显示MCP服务不可用提示
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                var warningBubble = new MessageBubble();
+                warningBubble.SetMessage("🔧 MCP工具服务未启用，将使用普通对话模式", false, "系统");
+                warningBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                messageList.Children.Add(warningBubble);
+                messageScrollViewer?.ScrollToEnd();
+            });
+
             // 如果工具管理器未初始化，使用普通对话模式
             await ProcessNormalConversationAsync(config, userMessage, messageList, messageScrollViewer);
             return;
         }
+
+        // 工具调用状态跟踪
+        var processedToolCallIds = new HashSet<string>();
+        MessageBubble? currentToolStatusBubble = null;
+
+        // 事件处理器定义
+        EventHandler<ToolCallExecutionEventArgs>? startedHandler = null;
+        EventHandler<ToolCallExecutionEventArgs>? completedHandler = null;
+        EventHandler<ToolCallExecutionEventArgs>? failedHandler = null;
 
         try
         {
@@ -1947,16 +2002,98 @@ public partial class MainView : UserControl
             }
 
             // 3. 构建对话历史
-            var conversationMessages = new List<ConversationMessage>
-            {
-                new ConversationMessage
-                {
-                    Role = "user",
-                    Content = enhancedUserMessage
-                }
-            };
+            var conversationMessages = new List<ConversationMessage>();
 
-            // 4. 应用上下文管理优化
+            // 添加系统提示，指导LLM进行单轮对话
+            if (availableTools.Count > 0)
+            {
+                conversationMessages.Add(new ConversationMessage
+                {
+                    Role = "system",
+                    Content = "你是一个智能助手，可以使用工具来帮助用户。请注意：这是单轮对话模式，你需要在一次交互中完成所有必要的工具调用，然后基于工具结果直接提供完整的最终回答。不要期待进行多轮工具调用。"
+                });
+            }
+
+            conversationMessages.Add(new ConversationMessage
+            {
+                Role = "user",
+                Content = enhancedUserMessage
+            });
+
+            // 4. 设置工具调用事件处理器（只订阅一次）
+            if (_toolCallExecutor != null)
+            {
+                startedHandler = (sender, args) =>
+                {
+                    var toolCallId = args.Execution.LlmToolCall.Id;
+                    if (processedToolCallIds.Contains($"started_{toolCallId}"))
+                        return; // 避免重复处理
+
+                    processedToolCallIds.Add($"started_{toolCallId}");
+
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (currentToolStatusBubble != null)
+                        {
+                            var toolName = args.Execution.LlmToolCall.Function?.Name ?? "未知工具";
+                            var currentContent = currentToolStatusBubble.GetCurrentContent();
+                            var updatedContent = currentContent + $"\n⏳ 开始执行: {toolName}";
+                            currentToolStatusBubble.SetMessage(updatedContent, false, "工具");
+                            messageScrollViewer?.ScrollToEnd();
+                        }
+                    });
+                };
+
+                completedHandler = (sender, args) =>
+                {
+                    var toolCallId = args.Execution.LlmToolCall.Id;
+                    if (processedToolCallIds.Contains($"completed_{toolCallId}"))
+                        return; // 避免重复处理
+
+                    processedToolCallIds.Add($"completed_{toolCallId}");
+
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (currentToolStatusBubble != null)
+                        {
+                            var toolName = args.Execution.LlmToolCall.Function?.Name ?? "未知工具";
+                            var currentContent = currentToolStatusBubble.GetCurrentContent();
+                            var updatedContent = currentContent + $"\n✅ 完成: {toolName}";
+                            currentToolStatusBubble.SetMessage(updatedContent, false, "工具");
+                            messageScrollViewer?.ScrollToEnd();
+                        }
+                    });
+                };
+
+                failedHandler = (sender, args) =>
+                {
+                    var toolCallId = args.Execution.LlmToolCall.Id;
+                    if (processedToolCallIds.Contains($"failed_{toolCallId}"))
+                        return; // 避免重复处理
+
+                    processedToolCallIds.Add($"failed_{toolCallId}");
+
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (currentToolStatusBubble != null)
+                        {
+                            var toolName = args.Execution.LlmToolCall.Function?.Name ?? "未知工具";
+                            var errorMessage = args.Execution.ErrorMessage ?? "未知错误";
+                            var currentContent = currentToolStatusBubble.GetCurrentContent();
+                            var updatedContent = currentContent + $"\n❌ 失败: {toolName} - {errorMessage}";
+                            currentToolStatusBubble.SetMessage(updatedContent, false, "工具");
+                            messageScrollViewer?.ScrollToEnd();
+                        }
+                    });
+                };
+
+                // 订阅事件
+                _toolCallExecutor.ToolCallExecutionStarted += startedHandler;
+                _toolCallExecutor.ToolCallExecutionCompleted += completedHandler;
+                _toolCallExecutor.ToolCallExecutionFailed += failedHandler;
+            }
+
+            // 5. 应用上下文管理优化
             if (App.ConversationContextManager != null)
             {
                 conversationMessages = App.ConversationContextManager.TruncateConversationHistory(conversationMessages);
@@ -1969,7 +2106,7 @@ public partial class MainView : UserControl
                 Debug.WriteLine("已应用对话上下文管理优化");
             }
 
-            // 3. 创建AI回复气泡
+            // 6. 创建AI回复气泡
             MessageBubble? aiBubble = null;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -1980,82 +2117,82 @@ public partial class MainView : UserControl
                 messageScrollViewer?.ScrollToEnd();
             });
 
-            // 4. 开始多轮对话处理
-            var maxRounds = 5; // 最大工具调用轮次
-            var currentRound = 0;
+            // 7. 开始单轮对话处理（简化流程）
             var apiService = new LlmApiService();
 
-            while (currentRound < maxRounds)
+            // 发送对话请求到LLM
+            Debug.WriteLine("开始对话处理");
+
+            LlmResponse? llmResponse = null;
+            var responseReceived = false;
+
+            var success = await apiService.SendConversationAsync(
+                config,
+                conversationMessages,
+                availableTools,
+                onLlmResponse: (response, isComplete) =>
+                {
+                    llmResponse = response;
+                    responseReceived = true;
+
+                    // 更新UI显示文本内容
+                    if (!string.IsNullOrEmpty(response.Content) && aiBubble != null)
+                    {
+                        _currentAiResponseBuilder?.Append(response.Content);
+
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            aiBubble.AppendContent(response.Content);
+                            messageScrollViewer?.ScrollToEnd();
+                        });
+                    }
+
+                    if (isComplete)
+                    {
+                        Debug.WriteLine($"LLM响应完成，包含 {response.ToolCalls.Count} 个工具调用");
+                    }
+                },
+                onError: (error) =>
+                {
+                    Debug.WriteLine($"LLM请求错误: {error}");
+                    responseReceived = true;
+                },
+                _cancellationTokenSource.Token
+            );
+
+            if (!success || !responseReceived || llmResponse == null)
             {
-                currentRound++;
-                Debug.WriteLine($"开始第 {currentRound} 轮对话");
+                Debug.WriteLine("LLM请求失败");
+                return;
+            }
 
-                // 发送对话请求到LLM
-                LlmResponse? llmResponse = null;
-                var responseReceived = false;
-
-                var success = await apiService.SendConversationAsync(
-                    config,
-                    conversationMessages,
-                    availableTools,
-                    onLlmResponse: (response, isComplete) =>
-                    {
-                        llmResponse = response;
-                        responseReceived = true;
-
-                        // 更新UI显示文本内容
-                        if (!string.IsNullOrEmpty(response.Content) && aiBubble != null)
-                        {
-                            _currentAiResponseBuilder?.Append(response.Content);
-                            
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                aiBubble.AppendContent(response.Content);
-                                messageScrollViewer?.ScrollToEnd();
-                            });
-                        }
-
-                        if (isComplete)
-                        {
-                            Debug.WriteLine($"LLM响应完成，包含 {response.ToolCalls.Count} 个工具调用");
-                        }
-                    },
-                    onError: (error) =>
-                    {
-                        Debug.WriteLine($"LLM请求错误: {error}");
-                        responseReceived = true;
-                    },
-                    _cancellationTokenSource.Token
-                );
-
-                if (!success || !responseReceived || llmResponse == null)
-                {
-                    Debug.WriteLine("LLM请求失败");
-                    break;
-                }
-
-                // 5. 检查是否有工具调用
-                if (!llmResponse.HasToolCalls)
-                {
-                    // 没有工具调用，对话结束
-                    Debug.WriteLine("对话完成，无工具调用");
-                    break;
-                }
-
-                // 6. 显示工具调用状态
+            // 5. 检查是否有工具调用
+            if (!llmResponse.HasToolCalls)
+            {
+                // 没有工具调用，对话结束
+                Debug.WriteLine("对话完成，无工具调用");
+                // 直接完成对话，不需要额外处理
+            }
+            else
+            {
+                // 6. 显示工具调用详细信息
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
-                    var toolInfoBubble = new MessageBubble();
-                    toolInfoBubble.SetMessage($"🔧 正在执行 {llmResponse.ToolCalls.Count} 个工具调用...", false, "工具");
-                    toolInfoBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                    messageList.Children.Add(toolInfoBubble);
+                    currentToolStatusBubble = new MessageBubble();
+                    var toolDetails = string.Join("\n", llmResponse.ToolCalls.Select(tc =>
+                        $"🔧 {tc.Function?.Name ?? "未知工具"}"));
+                    currentToolStatusBubble.SetMessage($"正在执行工具调用:\n{toolDetails}", false, "工具");
+                    currentToolStatusBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                    messageList.Children.Add(currentToolStatusBubble);
                     messageScrollViewer?.ScrollToEnd();
                 });
 
-                // 7. 执行工具调用
-                var toolExecutions = await _toolCallExecutor.ExecuteToolCallsAsync(
-                    llmResponse.ToolCalls, 
-                    availableTools, 
+                // 7. 执行工具调用（事件处理器已在方法开始时设置）
+                var toolExecutions = new List<ToolCallExecution>();
+
+                toolExecutions = await _toolCallExecutor.ExecuteToolCallsAsync(
+                    llmResponse.ToolCalls,
+                    availableTools,
                     _cancellationTokenSource.Token);
 
                 // 8. 显示工具执行结果摘要
@@ -2085,19 +2222,63 @@ public partial class MainView : UserControl
                 var toolMessages = _toolCallExecutor.ConvertExecutionsToMessages(toolExecutions);
                 conversationMessages.AddRange(toolMessages);
 
-                // 应用上下文管理优化（每轮对话后）
-                if (App.ConversationContextManager != null)
+                // 暂时禁用上下文管理优化，避免影响工具调用结果
+                // if (App.ConversationContextManager != null)
+                // {
+                //     conversationMessages = App.ConversationContextManager.TruncateConversationHistory(conversationMessages);
+                //     conversationMessages = App.ConversationContextManager.OptimizeToolCallResults(conversationMessages);
+                //
+                //     // 更新对话状态
+                //     App.ConversationContextManager.UpdateConversationState("tool_call_count", toolExecutions.Count);
+                // }
+
+                Debug.WriteLine("工具调用完成，工具结果已添加到对话历史");
+
+                // 10. 让LLM基于工具调用结果生成最终回复
+                Debug.WriteLine("开始生成基于工具结果的最终回复");
+
+                // 发送包含工具结果的对话请求
+                LlmResponse? finalResponse = null;
+                var finalResponseReceived = false;
+
+                var finalSuccess = await apiService.SendConversationAsync(
+                    config,
+                    conversationMessages,
+                    null, // 不再提供工具，确保LLM生成最终回复
+                    onLlmResponse: (response, isComplete) =>
+                    {
+                        finalResponse = response;
+                        finalResponseReceived = true;
+
+                        // 更新UI显示文本内容
+                        if (!string.IsNullOrEmpty(response.Content) && aiBubble != null)
+                        {
+                            _currentAiResponseBuilder?.Append(response.Content);
+
+                            Dispatcher.UIThread.Post(() =>
+                            {
+                                aiBubble.AppendContent(response.Content);
+                                messageScrollViewer?.ScrollToEnd();
+                            });
+                        }
+
+                        if (isComplete)
+                        {
+                            Debug.WriteLine("最终回复生成完成");
+                        }
+                    },
+                    onError: (error) =>
+                    {
+                        Debug.WriteLine($"生成最终回复时出错: {error}");
+                        finalResponseReceived = true;
+                    },
+                    _cancellationTokenSource.Token
+                );
+
+                if (!finalSuccess || !finalResponseReceived)
                 {
-                    conversationMessages = App.ConversationContextManager.TruncateConversationHistory(conversationMessages);
-                    conversationMessages = App.ConversationContextManager.OptimizeToolCallResults(conversationMessages);
-
-                    // 更新对话状态
-                    App.ConversationContextManager.UpdateConversationState("current_round", currentRound);
-                    App.ConversationContextManager.UpdateConversationState("tool_call_count", toolExecutions.Count);
+                    Debug.WriteLine("生成最终回复失败");
                 }
-
-                // 继续下一轮对话，让LLM基于工具结果生成最终回复
-                Debug.WriteLine("工具调用完成，继续下一轮让LLM生成最终回复");
             }
 
             // 10. 完成流式显示并保存消息
@@ -2120,23 +2301,72 @@ public partial class MainView : UserControl
                     }
                 }
             }
-
-            if (currentRound >= maxRounds)
-            {
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    var warningBubble = new MessageBubble();
-                    warningBubble.SetMessage("⚠️ 已达到最大工具调用轮次限制", false, "系统");
-                    warningBubble.HorizontalAlignment = HorizontalAlignment.Left;
-                    messageList.Children.Add(warningBubble);
-                    messageScrollViewer?.ScrollToEnd();
-                });
-            }
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"工具调用流程异常: {ex.Message}");
-            throw; // 重新抛出异常，让上层处理
+
+            // 显示用户友好的错误信息
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                var errorBubble = new MessageBubble();
+                string errorMessage = "抱歉，在执行工具调用时遇到了问题：\n";
+
+                if (ex.Message.Contains("MCP"))
+                {
+                    errorMessage += "MCP服务连接异常，请检查MCP服务配置。";
+                }
+                else if (ex.Message.Contains("timeout") || ex.Message.Contains("超时"))
+                {
+                    errorMessage += "工具调用超时，请稍后重试。";
+                }
+                else if (ex.Message.Contains("network") || ex.Message.Contains("网络"))
+                {
+                    errorMessage += "网络连接异常，请检查网络设置。";
+                }
+                else
+                {
+                    errorMessage += $"系统错误：{ex.Message}";
+                }
+
+                errorBubble.SetMessage(errorMessage, false, "系统");
+                errorBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                messageList.Children.Add(errorBubble);
+                messageScrollViewer?.ScrollToEnd();
+            });
+
+            // 降级到普通对话模式
+            try
+            {
+                await ProcessNormalConversationAsync(config, userMessage, messageList, messageScrollViewer);
+            }
+            catch (Exception fallbackEx)
+            {
+                Debug.WriteLine($"降级对话模式也失败: {fallbackEx.Message}");
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    var fallbackErrorBubble = new MessageBubble();
+                    fallbackErrorBubble.SetMessage("抱歉，系统暂时无法响应，请稍后重试。", false, "系统");
+                    fallbackErrorBubble.HorizontalAlignment = HorizontalAlignment.Left;
+                    messageList.Children.Add(fallbackErrorBubble);
+                    messageScrollViewer?.ScrollToEnd();
+                });
+            }
+        }
+        finally
+        {
+            // 取消事件订阅，防止内存泄漏
+            if (_toolCallExecutor != null)
+            {
+                if (startedHandler != null)
+                    _toolCallExecutor.ToolCallExecutionStarted -= startedHandler;
+                if (completedHandler != null)
+                    _toolCallExecutor.ToolCallExecutionCompleted -= completedHandler;
+                if (failedHandler != null)
+                    _toolCallExecutor.ToolCallExecutionFailed -= failedHandler;
+
+                Debug.WriteLine("已取消工具调用事件订阅");
+            }
         }
     }
 

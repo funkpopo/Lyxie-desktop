@@ -176,6 +176,14 @@ public partial class MessageBubble : UserControl
     }
 
     /// <summary>
+    /// 获取当前内容
+    /// </summary>
+    public string GetCurrentContent()
+    {
+        return _contentBuilder.ToString();
+    }
+
+    /// <summary>
     /// 追加内容（流式模式）
     /// </summary>
     public void AppendContent(string content)

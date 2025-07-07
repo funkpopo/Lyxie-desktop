@@ -30,7 +30,7 @@ public partial class App : Application
     public static IMcpService McpService { get; private set; } = new McpService();
 
     // 全局MCP服务器管理实例
-    public static IMcpServerManager? McpServerManager { get; private set; }
+    public static IMcpServerManager? McpServerManager => McpService.ServerManager;
 
     // 全局MCP服务监控实例
     public static IMcpServiceMonitor? McpServiceMonitor { get; private set; }
@@ -320,12 +320,13 @@ public partial class App : Application
             var toolManager = new McpToolManager(McpService, McpServerManager!);
             McpServiceMonitor = new McpServiceMonitor(McpService, toolManager);
 
+            // 初始化工具调用日志服务
+            ToolCallLogger = new ToolCallLogger();
+            Debug.WriteLine("工具调用日志服务已初始化");
+
             // 初始化工具选择优化器
-            if (ToolCallLogger != null)
-            {
-                ToolSelectionOptimizer = new ToolSelectionOptimizer(ToolCallLogger);
-                Debug.WriteLine("工具选择优化器已初始化");
-            }
+            ToolSelectionOptimizer = new ToolSelectionOptimizer(ToolCallLogger);
+            Debug.WriteLine("工具选择优化器已初始化");
 
             // 初始化对话上下文管理器
             ConversationContextManager = new ConversationContextManager();
