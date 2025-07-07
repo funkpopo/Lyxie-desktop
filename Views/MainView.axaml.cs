@@ -1673,6 +1673,15 @@ public partial class MainView : UserControl
             var config = App.Settings.LlmApiConfigs[activeConfigIndex];
             System.Diagnostics.Debug.WriteLine($"使用LLM配置: {config.Name} ({config.ModelName}) - {config.ApiUrl}");
 
+            // 判断是否支持function call
+            var apiService = new LlmApiService();
+            if (!apiService.SupportsFunctionCall)
+            {
+                // 不支持function call，走普通对话流程
+                await ProcessNormalConversationAsync(config, message, messageList, messageScrollViewer);
+                return;
+            }
+
             // 开始函数调用工作流
             await ProcessConversationWithToolsAsync(config, message, messageList, messageScrollViewer);
         }

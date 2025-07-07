@@ -57,6 +57,29 @@ namespace Lyxie_desktop.Services
             
             Debug.WriteLine($"找到 {enabledServers.Count} 个启用的服务器");
 
+            foreach (var server in enabledServers)
+            {
+                var serverName = server.Key;
+                var tools = await GetServerToolsAsync(serverName, cancellationToken);
+                if (tools != null && tools.Count > 0)
+                {
+                    allTools.AddRange(tools);
+                }
+            }
+
+            // 更新缓存
+            lock (_cacheLock)
+            {
+                _toolsCache.Clear();
+                foreach (var server in enabledServers)
+                {
+                    var serverName = server.Key;
+                    var tools = allTools.Where(t => t.ServerName == serverName).ToList();
+                    _toolsCache[serverName] = tools;
+                }
+                _lastCacheUpdate = DateTime.Now;
+            }
+
             Debug.WriteLine($"获取到总共 {allTools.Count} 个可用工具，来自 {_toolsCache.Count} 个服务器");
             return allTools;
         }

@@ -112,4 +112,9 @@ public interface ILlmApiService : IDisposable
         List<ConversationMessage> messages,
         List<McpTool>? availableTools,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 是否支持function call（函数调用/工具调用）能力，默认true。
+    /// </summary>
+    bool SupportsFunctionCall { get; }
 } 

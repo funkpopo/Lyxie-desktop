@@ -805,6 +805,11 @@ namespace Lyxie_desktop.Services
             }
         }
 
+        /// <summary>
+        /// 是否支持function call（函数调用/工具调用）能力，默认true。
+        /// </summary>
+        public virtual bool SupportsFunctionCall => true;
+
         // 释放资源
         public void Dispose()
         {
