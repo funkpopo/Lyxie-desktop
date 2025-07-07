@@ -103,7 +103,12 @@ namespace Lyxie_desktop.Views
             {
                 if (Definition.IsEnabled != value && !IsLoading)
                 {
-                    _ = Task.Run(async () => await ToggleServerAsync(value));
+                    // Optimistically update the model value
+                    Definition.IsEnabled = value;
+                    // Notify the UI immediately
+                    OnPropertyChanged(nameof(IsEnabled));
+                    // Trigger the background operation
+                    _ = Task.Run(() => ToggleServerAsync(value));
                 }
             }
         }
@@ -132,14 +137,14 @@ namespace Lyxie_desktop.Views
             {
                 IsLoading = true;
                 OperationStatus = enable ? "启动中..." : "停止中...";
+                OnPropertyChanged(nameof(StatusText));
             });
 
+            bool success = false;
             try
             {
-                Definition.IsEnabled = enable;
                 await _saveAction().ConfigureAwait(false);
 
-                bool success;
                 if (enable)
                 {
                     success = await _mcpService.StartServerAsync(_name).ConfigureAwait(false);
@@ -148,17 +153,32 @@ namespace Lyxie_desktop.Views
                 {
                     success = await _mcpService.StopServerAsync(_name).ConfigureAwait(false);
                 }
-                
-                SyncServerRunningState();
             }
             catch (Exception ex)
             {
                 // Log error
                 System.Diagnostics.Debug.WriteLine($"Error toggling server {_name}: {ex.Message}");
-                SyncServerRunningState();
+                success = false; // Ensure success is false on exception
             }
             finally
             {
+                // If the operation failed, revert the state
+                if (!success)
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        // Revert the optimistic change
+                        if (Definition.IsEnabled == enable) // Check if state wasn't changed by user again
+                        {
+                            Definition.IsEnabled = !enable;
+                            OnPropertyChanged(nameof(IsEnabled));
+                        }
+                    });
+                }
+                
+                // Always sync the final state from the source of truth
+                SyncServerRunningState();
+
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     IsLoading = false;

@@ -391,7 +391,7 @@
                                                         <!-- Availability Dot -->
                                                         <Ellipse Grid.Column="1" Width="12" Height="12" 
                                                                  Margin="10,0" VerticalAlignment="Center"
-                                                                 Fill="{Binding IsRunning, Converter={StaticResource BoolToBrushConverter}, ConverterParameter='#4CAF50,#9E9E9E'}"/>
+                                                                 Fill="{Binding IsRunning, Converter={StaticResource BoolToBrushConverter}, ConverterParameter='#66BB6A,#9E9E9E'}"/>
 
                                                         <!-- Toggle Switch -->
                                                         <ToggleSwitch Grid.Column="2" IsChecked="{Binding IsEnabled}"
