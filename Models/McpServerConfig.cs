@@ -25,7 +25,7 @@ namespace Lyxie_desktop.Models
     public string? Protocol { get; set; }
 
     [JsonProperty("isEnabled")]
-    public bool IsEnabled { get; set; } = true;
+    public bool IsEnabled { get; set; } = false;
 
     /// <summary>
     /// 是否启用自动验证
