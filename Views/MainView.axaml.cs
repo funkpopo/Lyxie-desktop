@@ -116,12 +116,6 @@ public partial class MainView : UserControl
             dev1Toggle.IsCheckedChanged += OnDev1Toggled;
         }
 
-        var dev2Toggle = this.FindControl<ToggleSwitch>("Dev2Toggle");
-        if (dev2Toggle != null)
-        {
-            dev2Toggle.IsCheckedChanged += OnDev2Toggled;
-        }
-
         // 订阅语言变更事件
         App.LanguageService.LanguageChanged += OnLanguageChanged;
 
@@ -146,49 +140,12 @@ public partial class MainView : UserControl
     {
         var ttsToggle = this.FindControl<ToggleSwitch>("TTSToggle");
         var dev1Toggle = this.FindControl<ToggleSwitch>("Dev1Toggle");
-        var dev2Toggle = this.FindControl<ToggleSwitch>("Dev2Toggle");
         
         if (ttsToggle != null)
             ttsToggle.IsChecked = App.Settings.EnableTTS;
             
         if (dev1Toggle != null)
             dev1Toggle.IsChecked = App.Settings.EnableDev1;
-            
-        if (dev2Toggle != null)
-        {
-            // 初始化MCP开关状态，不触发事件
-            dev2Toggle.IsChecked = App.Settings.EnableDev2;
-            
-            // 检查MCP服务状态并更新UI
-            try
-            {
-                // 获取MCP filesystem服务状态
-                bool isRunning = App.McpService.GetRunningServers().Contains("filesystem");
-                var configs = await App.McpService.GetConfigsAsync();
-                
-                if (configs.TryGetValue("filesystem", out var config))
-                {
-                    // 设置UI显示状态
-                    if (config.IsEnabled)
-                    {
-                        dev2Toggle.Content = isRunning ? "已启用 - 运行中" : "已启用 - 未运行";
-                    }
-                    else
-                    {
-                        dev2Toggle.Content = "已禁用";
-                    }
-                }
-                else
-                {
-                    dev2Toggle.Content = "未配置";
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"初始化MCP状态时出错: {ex.Message}");
-                dev2Toggle.Content = "状态错误";
-            }
-        }
     }
     
     private async void OnMainButtonClick(object? sender, RoutedEventArgs e)
@@ -308,17 +265,21 @@ public partial class MainView : UserControl
         if (toolPanel == null) return;
 
         _isAnimating = true;
-
-        if (_isToolPanelVisible)
+        try
         {
-            await HideToolPanel();
+            if (_isToolPanelVisible)
+            {
+                await HideToolPanel();
+            }
+            else
+            {
+                await ShowToolPanel();
+            }
         }
-        else
+        finally
         {
-            await ShowToolPanel();
+            _isAnimating = false;
         }
-
-        _isAnimating = false;
     }
 
     private void OnLanguageChanged(object? sender, Services.Language language)
@@ -379,11 +340,9 @@ public partial class MainView : UserControl
         // 确保所有开关可点击
         var ttsToggle = this.FindControl<ToggleSwitch>("TTSToggle");
         var dev1Toggle = this.FindControl<ToggleSwitch>("Dev1Toggle");
-        var dev2Toggle = this.FindControl<ToggleSwitch>("Dev2Toggle");
         
         if (ttsToggle != null) ttsToggle.IsHitTestVisible = true;
         if (dev1Toggle != null) dev1Toggle.IsHitTestVisible = true;
-        if (dev2Toggle != null) dev2Toggle.IsHitTestVisible = true;
     }
 
     private async Task HideToolPanel()
@@ -444,85 +403,6 @@ public partial class MainView : UserControl
             
             // TODO: 实现开发功能1切换
             System.Diagnostics.Debug.WriteLine($"开发功能1开关状态: {toggle.IsChecked}");
-        }
-    }
-
-    private async void OnDev2Toggled(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not ToggleSwitch dev2Toggle) return;
-        
-        // 立即禁用开关，防止快速切换
-        dev2Toggle.IsEnabled = false;
-
-        try
-        {
-            App.Settings.EnableDev2 = dev2Toggle.IsChecked ?? false;
-            App.SaveSettings();
-
-            if (dev2Toggle.IsChecked == true)
-            {
-                dev2Toggle.Content = "正在启用...";
-                Debug.WriteLine("请求启用MCP文件系统服务...");
-                
-                var configs = await App.McpService.GetConfigsAsync();
-                if (configs.TryGetValue("filesystem", out var config))
-                {
-                    config.IsEnabled = true;
-                    await App.McpService.SaveConfigsAsync(configs);
-
-                    bool success = await App.McpService.StartServerAsync("filesystem");
-                    
-                    if (success)
-                    {
-                        dev2Toggle.Content = "已启用";
-                        Debug.WriteLine("MCP文件系统服务已成功启动");
-                    }
-                    else
-                    {
-                        Debug.WriteLine("MCP文件系统服务启动失败");
-                        dev2Toggle.Content = "启动失败";
-                        dev2Toggle.IsChecked = false; // Revert
-                    }
-                }
-                else
-                {
-                    Debug.WriteLine("未找到MCP文件系统服务配置");
-                    dev2Toggle.Content = "配置缺失";
-                    dev2Toggle.IsChecked = false; // Revert
-                }
-            }
-            else
-            {
-                dev2Toggle.Content = "正在禁用...";
-                Debug.WriteLine("请求禁用MCP文件系统服务...");
-                
-                var configs = await App.McpService.GetConfigsAsync();
-                if (configs.TryGetValue("filesystem", out var config))
-                {
-                    config.IsEnabled = false;
-                    await App.McpService.SaveConfigsAsync(configs);
-                }
-                
-                await App.McpService.StopServerAsync("filesystem");
-                dev2Toggle.Content = "已禁用";
-                Debug.WriteLine("UI状态更新为已禁用");
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"MCP文件系统服务操作异常: {ex.Message}");
-            if (dev2Toggle != null)
-            {
-                dev2Toggle.Content = "操作异常";
-                dev2Toggle.IsChecked = App.Settings.EnableDev2; // Revert to saved state
-            }
-        }
-        finally
-        {
-            if (dev2Toggle != null)
-            {
-                dev2Toggle.IsEnabled = true;
-            }
         }
     }
 

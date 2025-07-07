@@ -53,71 +53,6 @@
             </Button.Styles>
         </Button>
 
-        <!-- MCP服务状态指示器 -->
-        <StackPanel Name="McpStatusPanel"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Top"
-                    Margin="20"
-                    ZIndex="3">
-
-            <!-- 状态图标 -->
-            <Border Name="McpStatusIcon"
-                    Width="12"
-                    Height="12"
-                    CornerRadius="6"
-                    Background="#FF6B6B"
-                    Margin="0,0,8,0"
-                    VerticalAlignment="Center">
-                <!-- 状态指示器动画 -->
-                <Border.Styles>
-                    <Style Selector="Border.running">
-                        <Setter Property="Background" Value="#4ECDC4"/>
-                    </Style>
-                    <Style Selector="Border.partial">
-                        <Setter Property="Background" Value="#FFE66D"/>
-                    </Style>
-                    <Style Selector="Border.error">
-                        <Setter Property="Background" Value="#FF6B6B"/>
-                    </Style>
-                    <Style Selector="Border.initializing">
-                        <Setter Property="Background" Value="#95A5A6"/>
-                    </Style>
-                </Border.Styles>
-            </Border>
-
-            <!-- 工具提示 -->
-            <StackPanel.Styles>
-                <Style Selector="StackPanel">
-                    <Setter Property="ToolTip.Tip">
-                        <Template>
-                            <Border Background="{DynamicResource TooltipBackgroundBrush}"
-                                    BorderBrush="{DynamicResource TooltipBorderBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="4"
-                                    Padding="8">
-                                <StackPanel>
-                                    <TextBlock Name="McpTooltipTitle"
-                                               Text="MCP服务状态"
-                                               FontWeight="Bold"
-                                               FontSize="12"
-                                               Foreground="{DynamicResource TextBrush}"
-                                               Margin="0,0,0,4"/>
-                                    <TextBlock Name="McpTooltipDetails"
-                                               Text="正在检查服务状态..."
-                                               FontSize="11"
-                                               Foreground="{DynamicResource TextBrush}"
-                                               Opacity="0.8"
-                                               TextWrapping="Wrap"
-                                               MaxWidth="200"/>
-                                </StackPanel>
-                            </Border>
-                        </Template>
-                    </Setter>
-                </Style>
-            </StackPanel.Styles>
-        </StackPanel>
-
         <!-- 扳手按钮 -->
         <Button Name="ToolButton"
                 Width="40"
@@ -322,7 +257,6 @@
                     <RowDefinition Height="Auto" MinHeight="30"/>  <!-- 标题行 -->
                     <RowDefinition Height="Auto" MinHeight="36"/>  <!-- TTS开关 -->
                     <RowDefinition Height="Auto" MinHeight="36"/>  <!-- 开发功能1 -->
-                    <RowDefinition Height="Auto" MinHeight="36"/>  <!-- 开发功能2 -->
                 </Grid.RowDefinitions>
                 
                 <!-- 样式定义：确保ToggleSwitch可以正确接收点击事件 -->
@@ -403,37 +337,6 @@
                               Width="46"
                               Height="28"
                               IsHitTestVisible="True" 
-                              VerticalAlignment="Center"
-                              HorizontalAlignment="Right"
-                              Margin="0,8,0,4"/>
-
-                <!-- 开发功能2开关行 -->
-                <materialIcons:MaterialIcon Grid.Row="3" Grid.Column="0"
-                                            Kind="FileTree"
-                                            Width="16"
-                                            Height="16"
-                                            Foreground="{DynamicResource SecondaryIconBrush}"
-                                            VerticalAlignment="Center"
-                                            Margin="0,8,8,4"/>
-                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Vertical" Margin="0,8,8,4">
-                    <TextBlock Text="MCP 工具"
-                              FontSize="12"
-                              Foreground="{DynamicResource SecondaryTextBrush}"
-                              VerticalAlignment="Center"/>
-                    <TextBlock Text="文件系统"
-                              FontSize="10"
-                              Opacity="0.8"
-                              Foreground="{DynamicResource SecondaryTextBrush}"
-                              VerticalAlignment="Center"/>
-                </StackPanel>
-                <ToggleSwitch Grid.Row="3" Grid.Column="2"
-                              Name="Dev2Toggle"
-                              OffContent="未启用"
-                              OnContent="已启用"
-                              Content="未验证"
-                              Width="46"
-                              Height="28"
-                              IsHitTestVisible="True"
                               VerticalAlignment="Center"
                               HorizontalAlignment="Right"
                               Margin="0,8,0,4"/>
