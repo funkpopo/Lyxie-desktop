@@ -2123,8 +2123,17 @@ public partial class MainView : UserControl
                 var toolResultMessages = _toolCallExecutor.ConvertExecutionsToMessages(toolExecutions);
                 conversationMessages.AddRange(toolResultMessages);
 
+                // 添加系统消息，提供工具调用结果的摘要
+                var executionSummary = _toolCallExecutor.FormatExecutionSummary(toolExecutions);
+                conversationMessages.Add(new ConversationMessage
+                {
+                    Role = "system",
+                    Content = $"以下是工具调用的执行结果，请基于这些信息生成回复：\n\n{executionSummary}"
+                });
+
                 // 5. 第三阶段：基于工具调用结果生成最终回复
                 Debug.WriteLine("第三阶段：基于工具调用结果生成最终回复");
+                Debug.WriteLine($"工具调用结果摘要：\n{executionSummary}");
             }
 
             // 6. 创建AI消息气泡（仅用于显示最终回复）
