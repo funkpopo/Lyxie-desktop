@@ -888,19 +888,40 @@ public partial class MainView : UserControl
         try
         {
             await ChatDataHelper.DeleteSessionAsync(session.Id);
-            
+
             if (_chatSidebar != null)
             {
                 _chatSidebar.RemoveSession(session);
             }
-            
-            // 如果删除的是当前会话，清空消息列表并创建新会话
+
+            // 如果删除的是当前会话，需要处理会话切换
             if (_currentSession?.Id == session.Id)
             {
                 ClearMessageList();
-                OnNewChatRequested(this, EventArgs.Empty);
+
+                // 检查是否还有其他会话
+                if (_chatSidebar != null && _chatSidebar.HasSessions())
+                {
+                    // 如果还有其他会话，选中第一个会话
+                    var firstSession = _chatSidebar.GetFirstSession();
+                    if (firstSession != null)
+                    {
+                        _currentSession = firstSession;
+                        _chatSidebar.SelectedSession = firstSession;
+
+                        // 加载选中会话的消息
+                        await LoadSessionMessages(firstSession);
+
+                        System.Diagnostics.Debug.WriteLine($"切换到会话: {firstSession.Title}");
+                    }
+                }
+                else
+                {
+                    // 如果没有其他会话了，创建新会话
+                    OnNewChatRequested(this, EventArgs.Empty);
+                }
             }
-            
+
             System.Diagnostics.Debug.WriteLine($"删除会话: {session.Title}");
         }
         catch (Exception ex)
@@ -1013,14 +1034,15 @@ public partial class MainView : UserControl
                 {
                     var messageBubble = new MessageBubble();
                     bool isUser = message.MessageType == MessageType.User;
-                    
+
                     // 设置消息内容和发送者
                     string senderName = isUser ? "您" : "Lyxie";
-                    messageBubble.SetMessage(message.Content, isUser, senderName);
-                    
+                    // 对于历史消息，传递isHistoryMessage=true，避免重复处理think标签
+                    messageBubble.SetMessage(message.Content, isUser, senderName, useMarkdown: !isUser, isHistoryMessage: true);
+
                     // 设置消息气泡的对齐方式
                     messageBubble.HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left;
-                    
+
                     messageList.Children.Add(messageBubble);
                 }
                 

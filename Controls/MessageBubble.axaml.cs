@@ -6,6 +6,7 @@ using Avalonia.Threading;
 using Avalonia.Markup.Xaml;
 using Lyxie_desktop.Helpers;
 using System;
+using System.Collections.Generic;
 using System.Text;
 
 namespace Lyxie_desktop.Controls;
@@ -27,6 +28,7 @@ public partial class MessageBubble : UserControl
     private bool _isStreamingMode = false;
     private bool _isUser = false;
     private string? _senderName = null;
+    private bool _thinkTagsProcessed = false; // 标记是否已经处理过think标签
 
     public MessageBubble()
     {
@@ -51,7 +53,12 @@ public partial class MessageBubble : UserControl
     /// <summary>
     /// 设置完整消息（非流式模式）
     /// </summary>
-    public void SetMessage(string message, bool isUser, string? senderName = null, bool useMarkdown = false)
+    /// <param name="message">消息内容</param>
+    /// <param name="isUser">是否为用户消息</param>
+    /// <param name="senderName">发送者名称</param>
+    /// <param name="useMarkdown">是否使用Markdown渲染</param>
+    /// <param name="isHistoryMessage">是否为历史消息（历史消息不重新处理think标签）</param>
+    public void SetMessage(string message, bool isUser, string? senderName = null, bool useMarkdown = false, bool isHistoryMessage = false)
     {
         _isStreamingMode = false;
         _isUser = isUser;
@@ -63,30 +70,79 @@ public partial class MessageBubble : UserControl
         var bubbleBorder = this.FindControl<Border>("BubbleBorder");
         var thinkBlockContainer = this.FindControl<StackPanel>("ThinkBlockContainer");
 
-        // 处理think标签（仅对AI消息处理）
+        // 处理think标签
         string displayMessage = message;
-        if (!isUser && MessageProcessor.HasThinkTags(message))
+        
+        if (!isUser && !_thinkTagsProcessed && MessageProcessor.HasThinkTags(message))
         {
-            var processResult = MessageProcessor.ProcessThinkTags(message);
-            displayMessage = processResult.CleanedMessage;
-            
-            // 创建think blocks
-            if (processResult.HasThinkContent && thinkBlockContainer != null)
+            if (isHistoryMessage)
             {
-                thinkBlockContainer.Children.Clear();
-                thinkBlockContainer.IsVisible = true;
+                // 历史消息：处理think标签但去重
+                System.Diagnostics.Debug.WriteLine($"MessageBubble.SetMessage: 开始处理历史消息think标签");
                 
-                foreach (var thinkContent in processResult.ThinkBlocks)
+                var processResult = MessageProcessor.ProcessThinkTags(message);
+                displayMessage = processResult.CleanedMessage;
+
+                // 创建think blocks，但要去重
+                if (processResult.HasThinkContent && thinkBlockContainer != null)
                 {
-                    var thinkBlock = new ThinkBlock();
-                    thinkBlock.SetThinkContent(thinkContent);
-                    thinkBlockContainer.Children.Add(thinkBlock);
+                    thinkBlockContainer.Children.Clear();
+                    thinkBlockContainer.IsVisible = true;
+
+                    // 去重：使用HashSet来避免重复的think内容
+                    var uniqueThinkContents = new HashSet<string>();
+                    
+                    foreach (var thinkContent in processResult.ThinkBlocks)
+                    {
+                        if (uniqueThinkContents.Add(thinkContent)) // 如果是新内容才添加
+                        {
+                            var thinkBlock = new ThinkBlock();
+                            thinkBlock.SetThinkContent(thinkContent);
+                            thinkBlockContainer.Children.Add(thinkBlock);
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"MessageBubble.SetMessage: 跳过重复的think内容: {thinkContent.Substring(0, Math.Min(50, thinkContent.Length))}...");
+                        }
+                    }
+                    
+                    System.Diagnostics.Debug.WriteLine($"MessageBubble.SetMessage: 历史消息think标签处理完成, 原始数量={processResult.ThinkBlocks.Count}, 去重后数量={uniqueThinkContents.Count}");
                 }
             }
+            else
+            {
+                // 新消息：正常处理
+                var processResult = MessageProcessor.ProcessThinkTags(message);
+                displayMessage = processResult.CleanedMessage;
+
+                // 创建think blocks
+                if (processResult.HasThinkContent && thinkBlockContainer != null)
+                {
+                    thinkBlockContainer.Children.Clear();
+                    thinkBlockContainer.IsVisible = true;
+
+                    foreach (var thinkContent in processResult.ThinkBlocks)
+                    {
+                        var thinkBlock = new ThinkBlock();
+                        thinkBlock.SetThinkContent(thinkContent);
+                        thinkBlockContainer.Children.Add(thinkBlock);
+                    }
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"MessageBubble.SetMessage: 新消息think标签处理完成, ThinkBlocks数量={processResult.ThinkBlocks.Count}");
+            }
+
+            // 标记已处理过think标签
+            _thinkTagsProcessed = true;
+        }
+        else if (thinkBlockContainer != null && (!isUser && _thinkTagsProcessed))
+        {
+            // 如果已经处理过think标签，保持think容器的当前状态
+            // 不做任何操作，保留已有的ThinkBlock组件
         }
         else if (thinkBlockContainer != null)
         {
-            // 隐藏think容器
+            // 用户消息或无think标签时隐藏think容器
             thinkBlockContainer.IsVisible = false;
             thinkBlockContainer.Children.Clear();
         }
@@ -137,6 +193,7 @@ public partial class MessageBubble : UserControl
         _isUser = isUser;
         _senderName = senderName;
         _contentBuilder.Clear();
+        _thinkTagsProcessed = false; // 重置think标签处理状态
 
         var messageText = this.FindControl<SelectableTextBlock>("MessageText");
         var markdownContainer = this.FindControl<ScrollViewer>("MarkdownContainer");
@@ -227,28 +284,39 @@ public partial class MessageBubble : UserControl
         {
             try
             {
-                // 处理think标签
+                // 处理think标签（仅在未处理过的情况下）
                 string processedContent = fullContent;
                 var thinkBlockContainer = this.FindControl<StackPanel>("ThinkBlockContainer");
-                
-                if (MessageProcessor.HasThinkTags(fullContent))
+
+                if (!_thinkTagsProcessed && MessageProcessor.HasThinkTags(fullContent))
                 {
+                    System.Diagnostics.Debug.WriteLine($"CompleteStreamingAndEnableMarkdown: 开始处理think标签, _thinkTagsProcessed={_thinkTagsProcessed}");
+                    
                     var processResult = MessageProcessor.ProcessThinkTags(fullContent);
                     processedContent = processResult.CleanedMessage;
-                    
+
                     // 创建think blocks
                     if (processResult.HasThinkContent && thinkBlockContainer != null)
                     {
                         thinkBlockContainer.Children.Clear();
                         thinkBlockContainer.IsVisible = true;
-                        
+
                         foreach (var thinkContent in processResult.ThinkBlocks)
                         {
                             var thinkBlock = new ThinkBlock();
                             thinkBlock.SetThinkContent(thinkContent);
                             thinkBlockContainer.Children.Add(thinkBlock);
                         }
+                        
+                        System.Diagnostics.Debug.WriteLine($"CompleteStreamingAndEnableMarkdown: 创建了{processResult.ThinkBlocks.Count}个ThinkBlock");
                     }
+
+                    // 标记已处理过think标签
+                    _thinkTagsProcessed = true;
+                }
+                else if (MessageProcessor.HasThinkTags(fullContent))
+                {
+                    System.Diagnostics.Debug.WriteLine($"CompleteStreamingAndEnableMarkdown: 跳过think标签处理, _thinkTagsProcessed={_thinkTagsProcessed}");
                 }
 
                 // 使用新的Markdown渲染器

@@ -436,6 +436,22 @@ namespace Lyxie_desktop.Controls
         }
 
         /// <summary>
+        /// 获取第一个会话（如果存在）
+        /// </summary>
+        public ChatSession? GetFirstSession()
+        {
+            return Sessions.Count > 0 ? Sessions[0] : null;
+        }
+
+        /// <summary>
+        /// 检查是否还有会话
+        /// </summary>
+        public bool HasSessions()
+        {
+            return Sessions.Count > 0;
+        }
+
+        /// <summary>
         /// 处理控件内的指针按下事件
         /// </summary>
         private void OnControlPointerPressed(object? sender, PointerPressedEventArgs e)
