@@ -23,6 +23,11 @@ namespace Lyxie_desktop.Services
         private DateTime _lastCacheUpdate = DateTime.MinValue;
         private readonly TimeSpan _cacheExpiry = TimeSpan.FromMinutes(5);
 
+        // 工具调用去重缓存
+        private readonly Dictionary<string, DateTime> _recentToolCalls = new();
+        private readonly object _deduplicationLock = new object();
+        private readonly TimeSpan _deduplicationWindow = TimeSpan.FromSeconds(5); // 5秒内的相同调用视为重复
+
         public event EventHandler<ToolCallStatusEventArgs>? ToolCallStatusChanged;
 
         public McpToolManager(IMcpService mcpService, IMcpServerManager serverManager)
@@ -251,21 +256,35 @@ namespace Lyxie_desktop.Services
             var relevantTools = new List<(McpTool Tool, int Score)>();
             var messageLower = userMessage.ToLowerInvariant();
 
+            Debug.WriteLine($"开始匹配相关工具，用户消息: '{userMessage}'");
+            Debug.WriteLine($"可用工具数量: {availableTools.Count}");
+
             foreach (var tool in availableTools)
             {
                 var score = CalculateRelevanceScore(messageLower, tool);
+                Debug.WriteLine($"工具 '{tool.Name}' 相关性得分: {score}");
+
+                // 降低阈值，让更多工具有机会被选中
                 if (score > 0)
                 {
                     relevantTools.Add((tool, score));
                 }
             }
 
-            // 按相关性得分排序，返回前5个最相关的工具
-            return relevantTools
+            // 按相关性得分排序，返回前8个最相关的工具（增加数量）
+            var selectedTools = relevantTools
                 .OrderByDescending(x => x.Score)
-                .Take(5)
+                .Take(8)
                 .Select(x => x.Tool)
                 .ToList();
+
+            Debug.WriteLine($"匹配到 {selectedTools.Count} 个相关工具:");
+            foreach (var tool in selectedTools)
+            {
+                Debug.WriteLine($"  - {tool.Name}: {tool.Description}");
+            }
+
+            return selectedTools;
         }
 
         /// <summary>
@@ -298,6 +317,22 @@ namespace Lyxie_desktop.Services
                     if (messageLower.Contains(keyword) && keyword.Length > 3)
                         score += 20;
                 }
+            }
+
+            // 通用动作词匹配（增加基础分数）
+            var actionWords = new[] { "获取", "查询", "搜索", "查找", "创建", "生成", "执行", "运行", "处理", "分析", "读取", "写入", "下载", "上传" };
+            foreach (var action in actionWords)
+            {
+                if (messageLower.Contains(action))
+                {
+                    score += 15; // 任何动作词都增加基础分数
+                }
+            }
+
+            // 问号表示查询意图
+            if (messageLower.Contains("?") || messageLower.Contains("？"))
+            {
+                score += 10;
             }
 
             // 常见用途模式匹配
@@ -367,7 +402,41 @@ namespace Lyxie_desktop.Services
         public async Task<McpToolResult> CallToolAsync(McpToolCall toolCall, CancellationToken cancellationToken = default)
         {
             var startTime = DateTime.Now;
-            
+
+            // 检查是否为重复调用
+            var deduplicationKey = GenerateDeduplicationKey(toolCall);
+            lock (_deduplicationLock)
+            {
+                if (_recentToolCalls.TryGetValue(deduplicationKey, out var lastCallTime))
+                {
+                    if (DateTime.Now - lastCallTime < _deduplicationWindow)
+                    {
+                        Debug.WriteLine($"检测到重复工具调用，跳过: {toolCall.ToolName}");
+                        return new McpToolResult
+                        {
+                            CallId = toolCall.Id,
+                            IsSuccess = false,
+                            ErrorMessage = "重复的工具调用已被跳过",
+                            Duration = TimeSpan.Zero
+                        };
+                    }
+                }
+
+                // 记录此次调用
+                _recentToolCalls[deduplicationKey] = DateTime.Now;
+
+                // 清理过期的记录
+                var expiredKeys = _recentToolCalls
+                    .Where(kvp => DateTime.Now - kvp.Value > _deduplicationWindow)
+                    .Select(kvp => kvp.Key)
+                    .ToList();
+
+                foreach (var key in expiredKeys)
+                {
+                    _recentToolCalls.Remove(key);
+                }
+            }
+
             // 触发开始事件
             ToolCallStatusChanged?.Invoke(this, new ToolCallStatusEventArgs
             {
@@ -600,6 +669,26 @@ namespace Lyxie_desktop.Services
                 .ToList();
 
             return string.Join("\n", textParts);
+        }
+
+        /// <summary>
+        /// 生成工具调用去重键
+        /// </summary>
+        private string GenerateDeduplicationKey(McpToolCall toolCall)
+        {
+            // 基于工具名称、服务器名称和参数生成唯一键
+            var parametersJson = toolCall.Parameters != null
+                ? JsonConvert.SerializeObject(toolCall.Parameters, Formatting.None)
+                : "";
+
+            var keyData = $"{toolCall.ServerName}:{toolCall.ToolName}:{parametersJson}";
+
+            // 使用简单的哈希来缩短键长度
+            using (var sha256 = System.Security.Cryptography.SHA256.Create())
+            {
+                var hashBytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(keyData));
+                return Convert.ToBase64String(hashBytes).Substring(0, 16); // 取前16个字符
+            }
         }
 
         /// <summary>

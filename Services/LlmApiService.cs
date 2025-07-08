@@ -596,8 +596,18 @@ namespace Lyxie_desktop.Services
                                     var contentChunk = delta["content"]?.ToString() ?? "";
                                     if (!string.IsNullOrEmpty(contentChunk))
                                     {
+                                        // 创建一个只包含增量内容的响应对象
+                                        var incrementalResponse = new LlmResponse
+                                        {
+                                            Content = contentChunk,
+                                            ToolCalls = currentResponse.ToolCalls
+                                        };
+
+                                        // 同时更新累积内容
                                         currentResponse.Content += contentChunk;
-                                        onLlmResponse.Invoke(currentResponse, false);
+
+                                        // 传递增量内容给回调
+                                        onLlmResponse.Invoke(incrementalResponse, false);
                                     }
                                 }
                                 
@@ -638,7 +648,14 @@ namespace Lyxie_desktop.Services
                                     
                                     // 更新当前响应的工具调用
                                     currentResponse.ToolCalls = currentToolCalls.Values.ToList();
-                                    onLlmResponse.Invoke(currentResponse, false);
+
+                                    // 对于工具调用，传递一个空内容的响应（避免重复内容）
+                                    var toolCallResponse = new LlmResponse
+                                    {
+                                        Content = "",
+                                        ToolCalls = currentResponse.ToolCalls
+                                    };
+                                    onLlmResponse.Invoke(toolCallResponse, false);
                                 }
                             }
                             

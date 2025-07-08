@@ -192,7 +192,7 @@ namespace Lyxie_desktop.Services
         private double CalculateRelevanceScore(McpTool tool, string userQuery)
         {
             if (string.IsNullOrEmpty(userQuery))
-                return 0.5;
+                return 0.3; // 提高默认分数
 
             var query = userQuery.ToLowerInvariant();
             var toolName = tool.Name.ToLowerInvariant();
@@ -200,28 +200,53 @@ namespace Lyxie_desktop.Services
 
             double score = 0.0;
 
-            // 工具名称匹配
+            // 工具名称匹配（提高权重）
             if (query.Contains(toolName) || toolName.Contains(query))
-                score += 0.4;
+                score += 0.5;
 
-            // 描述匹配
+            // 部分名称匹配
+            var toolNameParts = toolName.Split('_', '-', ' ');
+            foreach (var part in toolNameParts)
+            {
+                if (query.Contains(part) && part.Length > 2)
+                    score += 0.2;
+            }
+
+            // 描述匹配（提高权重）
             var queryWords = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var descWords = toolDesc.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            
+
             var matchingWords = queryWords.Intersect(descWords).Count();
             if (queryWords.Length > 0)
             {
-                score += (double)matchingWords / queryWords.Length * 0.3;
+                score += (double)matchingWords / queryWords.Length * 0.4;
             }
 
-            // 关键词匹配
+            // 关键词匹配（提高权重）
             var keywords = ExtractKeywords(query);
             foreach (var keyword in keywords)
             {
                 if (toolName.Contains(keyword) || toolDesc.Contains(keyword))
                 {
-                    score += 0.1;
+                    score += 0.15;
                 }
+            }
+
+            // 通用动作词匹配
+            var actionWords = new[] { "获取", "查询", "搜索", "查找", "创建", "生成", "执行", "运行", "处理", "分析" };
+            foreach (var action in actionWords)
+            {
+                if (query.Contains(action))
+                {
+                    score += 0.1; // 任何动作词都增加基础分数
+                    break;
+                }
+            }
+
+            // 如果查询包含问号，增加工具调用倾向
+            if (query.Contains("?") || query.Contains("？"))
+            {
+                score += 0.1;
             }
 
             return Math.Min(1.0, score);
@@ -257,9 +282,30 @@ namespace Lyxie_desktop.Services
             // 网络操作关键词
             if (query.Contains("下载") || query.Contains("download"))
                 keywords.Add("download");
-                
-            if (query.Contains("请求") || query.Contains("http"))
+
+            if (query.Contains("请求") || query.Contains("http") || query.Contains("api") || query.Contains("网络"))
                 keywords.Add("http");
+
+            // 数据操作关键词
+            if (query.Contains("数据") || query.Contains("data"))
+                keywords.Add("data");
+
+            if (query.Contains("搜索") || query.Contains("search") || query.Contains("查找"))
+                keywords.Add("search");
+
+            if (query.Contains("分析") || query.Contains("analyze") || query.Contains("analysis"))
+                keywords.Add("analyze");
+
+            // 工具操作关键词
+            if (query.Contains("工具") || query.Contains("tool"))
+                keywords.Add("tool");
+
+            if (query.Contains("命令") || query.Contains("command") || query.Contains("执行"))
+                keywords.Add("command");
+
+            // 信息获取关键词
+            if (query.Contains("信息") || query.Contains("info") || query.Contains("详情"))
+                keywords.Add("info");
 
             return keywords;
         }
@@ -275,23 +321,39 @@ namespace Lyxie_desktop.Services
             // 分析查询复杂度
             var queryComplexity = AnalyzeQueryComplexity(userQuery);
             
-            // 计算工具相关性
+            // 计算工具相关性（降低阈值以增加工具调用机会）
             var relevantTools = availableTools
-                .Where(tool => CalculateRelevanceScore(tool, userQuery) > 0.3)
+                .Where(tool => CalculateRelevanceScore(tool, userQuery) > 0.1)
                 .ToList();
 
+            Debug.WriteLine($"工具选择优化器: 在{availableTools.Count}个可用工具中找到{relevantTools.Count}个相关工具");
+            foreach (var tool in relevantTools)
+            {
+                var score = CalculateRelevanceScore(tool, userQuery);
+                Debug.WriteLine($"  - 相关工具: {tool.Name} (相关性: {score:F2})");
+            }
+
+            string toolChoice;
             if (relevantTools.Count == 0)
             {
-                return "none"; // 没有相关工具
+                // 即使没有明显相关的工具，也给LLM选择的机会
+                toolChoice = queryComplexity > 0.2 ? "auto" : "none";
+                Debug.WriteLine($"工具选择决策: 无相关工具，复杂度{queryComplexity:F2} -> {toolChoice}");
             }
-            else if (relevantTools.Count == 1 && queryComplexity < 0.5)
+            else if (relevantTools.Count == 1 && queryComplexity > 0.3)
             {
-                return "required"; // 强制使用唯一相关工具
+                // 有明确相关工具且查询复杂时，建议使用
+                toolChoice = "auto"; // 改为auto让LLM决定
+                Debug.WriteLine($"工具选择决策: 单个相关工具，复杂度{queryComplexity:F2} -> {toolChoice}");
             }
             else
             {
-                return "auto"; // 让LLM自动选择
+                // 多个相关工具或复杂查询，让LLM自动选择
+                toolChoice = "auto";
+                Debug.WriteLine($"工具选择决策: {relevantTools.Count}个相关工具，复杂度{queryComplexity:F2} -> {toolChoice}");
             }
+
+            return toolChoice;
         }
 
         /// <summary>
@@ -303,21 +365,26 @@ namespace Lyxie_desktop.Services
                 return 0.0;
 
             double complexity = 0.0;
-            
-            // 基于长度
-            complexity += Math.Min(0.3, query.Length / 200.0);
-            
-            // 基于问号数量（多个问题）
-            complexity += Math.Min(0.2, query.Count(c => c == '?') * 0.1);
-            
-            // 基于连接词（复杂逻辑）
-            var conjunctions = new[] { "和", "或", "但是", "然后", "接着", "同时", "and", "or", "but", "then" };
-            complexity += Math.Min(0.3, conjunctions.Count(conj => query.Contains(conj, StringComparison.OrdinalIgnoreCase)) * 0.1);
-            
-            // 基于动词数量（多个动作）
-            var actionWords = new[] { "读取", "写入", "创建", "删除", "搜索", "查找", "下载", "上传", "分析", "处理" };
-            complexity += Math.Min(0.2, actionWords.Count(action => query.Contains(action, StringComparison.OrdinalIgnoreCase)) * 0.05);
 
+            // 基于长度（降低阈值）
+            complexity += Math.Min(0.2, query.Length / 100.0);
+
+            // 基于问号数量（多个问题）
+            complexity += Math.Min(0.3, query.Count(c => c == '?' || c == '？') * 0.15);
+
+            // 基于连接词（复杂逻辑）
+            var conjunctions = new[] { "和", "或", "但是", "然后", "接着", "同时", "以及", "还有", "另外", "and", "or", "but", "then", "also", "additionally" };
+            complexity += Math.Min(0.3, conjunctions.Count(conj => query.Contains(conj, StringComparison.OrdinalIgnoreCase)) * 0.1);
+
+            // 基于动词数量（多个动作，扩展词汇）
+            var actionWords = new[] { "读取", "写入", "创建", "删除", "搜索", "查找", "下载", "上传", "分析", "处理", "获取", "生成", "执行", "运行", "计算", "转换", "解析", "验证" };
+            complexity += Math.Min(0.3, actionWords.Count(action => query.Contains(action, StringComparison.OrdinalIgnoreCase)) * 0.08);
+
+            // 基于技术词汇（表明需要工具支持）
+            var techWords = new[] { "文件", "数据", "API", "系统", "网络", "服务", "配置", "日志", "进程", "命令", "脚本", "代码" };
+            complexity += Math.Min(0.2, techWords.Count(tech => query.Contains(tech, StringComparison.OrdinalIgnoreCase)) * 0.05);
+
+            Debug.WriteLine($"查询复杂度分析: '{query}' -> 复杂度: {complexity:F2}");
             return Math.Min(1.0, complexity);
         }
 
